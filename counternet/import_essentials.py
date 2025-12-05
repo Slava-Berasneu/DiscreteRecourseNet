@@ -35,7 +35,4 @@ from pytorch_lightning.loggers.base import LightningLoggerBase
 from pytorch_lightning import loggers as pl_loggers
 from torchmetrics import Metric, Accuracy
 from torchmetrics.functional.classification import accuracy
-
 from pytorch_lightning.utilities.seed import seed_everything
-
-seed_everything(seed=31)

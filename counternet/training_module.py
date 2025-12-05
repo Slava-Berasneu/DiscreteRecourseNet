@@ -47,7 +47,7 @@ class BaseModule(pl.LightningModule, ABCBaseModule):
         assert sorted(list(self.data.columns[:-1])) == sorted(self.continous_cols + self.discret_cols), \
             f"data columns ({sorted(list(self.data.columns[:-1]))}) is not the same as continous_cols and discret_cols ({sorted(self.continous_cols + self.discret_cols)})"
         self.data = self.data.astype(
-            {col: np.float for col in self.continous_cols})
+            {col: float for col in self.continous_cols})
 
     def __check_cat_size(self, X_cat: torch.Tensor, categories: List[List[Any]]):
         n = 0

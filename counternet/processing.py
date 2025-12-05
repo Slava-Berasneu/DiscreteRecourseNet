@@ -86,7 +86,7 @@ class OneHotEncoder(object):
 
     def __init__(self):
         from sklearn.preprocessing import OneHotEncoder
-        self.enc = OneHotEncoder(sparse=False)
+        self.enc = OneHotEncoder(sparse_output=False)
 
     def fit(self, X):
         self.enc.fit(X)

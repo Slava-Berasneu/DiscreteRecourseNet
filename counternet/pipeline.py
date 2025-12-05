@@ -16,19 +16,31 @@ logging.getLogger('pytorch_lightning').setLevel(logging.ERROR)
 pl_logger = logging.getLogger("pytorch_lightning.core")
 
 # Cell
-def load_trained_model(module: BaseModule, checkpoint_path: str, gpus : int = 0) -> BaseModule:
-    # assuming checkpoint_path = f"{dict_path}/epoch={n_epoch}-step={step}.ckpt"
+def load_trained_model(module: BaseModule, checkpoint_path: str, gpus: int = 0) -> BaseModule:
+    """
+    Load weights from a Lightning checkpoint into a constructed module.
+    """
+    checkpoint_path = str(checkpoint_path)
     if not os.path.exists(checkpoint_path):
-        raise FileNotFoundError(f'{checkpoint_path} is not found.')
+        raise FileNotFoundError(f"{checkpoint_path} is not found.")
 
-    n_iter = int(checkpoint_path.split("-")[0].split("=")[-1]) + 1
-    # model = module.load_from_checkpoint(checkpoint_path)
-    tmp_trainer = pl.Trainer(
-        max_epochs=n_iter, resume_from_checkpoint=checkpoint_path, num_sanity_val_steps=0, gpus=gpus,
-        logger=False, checkpoint_callback=False
-    )
-    tmp_trainer.fit(module)
+    if gpus > 0 and torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
 
+    # Load checkpoint
+    ckpt = torch.load(checkpoint_path, map_location=device)
+    state_dict = ckpt.get("state_dict", ckpt)
+
+    # Load weights into the provided module
+    try:
+        module.load_state_dict(state_dict)
+    except RuntimeError:
+        module.load_state_dict(state_dict, strict=False)
+
+    module.to(device)
+    module.eval()
     return module
 
 # Cell
@@ -43,10 +55,13 @@ class ModelTrainer(object):
                  logger_name: str = "debug"):
 
         if logger is None:
-            logger = pl_loggers.TestTubeLogger(
-                Path('log/'), name=logger_name,
-                description=description, debug=debug, log_graph=False
+            logger = pl_loggers.TensorBoardLogger(
+                save_dir="log/",
+                name=logger_name,
+                log_graph=False,
+                default_hp_metric=False,
             )
+
 
         # model checkpoint
         self.checkpoint_callback = ModelCheckpoint(
@@ -308,13 +323,21 @@ class Experiment(object):
                 self.use_pred_model = True
 
     def __check_seeds(self, seeds: Optional[List[int]]):
-        try:
-            seeds = seeds if seeds is not None else [os.environ.get("PL_GLOBAL_SEED")]
-        except (TypeError, ValueError):
-            seed_everything(31); seeds = [31]
-        return seeds
+        if seeds is not None and len(seeds) > 0:
+            return list(seeds)
 
-    def __make_dir(self, dataset_name: str, seed: List[int]):
+        env_seed = os.environ.get("PL_GLOBAL_SEED")
+        if env_seed is not None:
+            try:
+                return [int(env_seed)]
+            except ValueError:
+                pass
+
+        default_seed = 31
+        print(f"[INFO] No seed provided; defaulting to {default_seed}")
+        return [default_seed]
+
+    def __make_dir(self, dataset_name: str, seed: int):
         dir_path = Path(f'assets/results/{dataset_name}/seed-{seed}/')
         dir_path.mkdir(parents=True, exist_ok=True)
         return dir_path
@@ -342,7 +365,7 @@ class Experiment(object):
         results = cf_generator.generate(debug=self.debug)
         self.evaluator.eval(results, dir_path)
 
-    def experiment_step(self, m_config, seed: List[int]):
+    def experiment_step(self, m_config, seed: int):
         # train a baseline predictive model
         if self.use_pred_model:
             print("training predictive model...")

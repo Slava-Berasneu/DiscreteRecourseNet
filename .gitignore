@@ -142,3 +142,4 @@ checklink/cookies.txt
 # logs
 log
 lightning_logs
+/assets/results/

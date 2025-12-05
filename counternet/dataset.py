@@ -60,7 +60,7 @@ def bn_gen():
     data[:, 1] = x2
     data[:, 2] = x3
     data[:, 3] = x4
-    data[:, 4] = np.array(y > .5, dtype=np.int)
+    data[:, 4] = np.array(y > .5, dtype=int)
     return pd.DataFrame(data, columns=['x1', 'x2', 'x3', 'x4', 'y'])
 
 # Cell
