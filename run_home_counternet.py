@@ -20,6 +20,7 @@ from pytorch_lightning import seed_everything
 def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int) -> Path:
     """
     Searches for a model checkpoint and returns the path
+    Prefers the best checkpoint
     """
     if ckpt_arg:
         ckpt_path = Path(ckpt_arg)
@@ -35,6 +36,12 @@ def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int
 
     dataset_name = m_config["dataset_name"]
     run_dir = results_root / dataset_name / f"seed-{seed}"
+
+    # Prefer the best.ckpt if it exists
+    best_alias = run_dir / "best.ckpt"
+    if best_alias.is_file():
+        return best_alias
+
     candidates = sorted(run_dir.glob("*.ckpt"))
     if not candidates:
         raise FileNotFoundError(
@@ -42,7 +49,6 @@ def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int
             f"Try running with --retrain first, or pass --ckpt explicitly."
         )
     return candidates[-1]
-
 
 def train_full_experiment(m_config_path: Path, t_config_path: Path,
                           results_root: Path, seed: int, debug: bool) -> None:
