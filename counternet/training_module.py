@@ -155,6 +155,9 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         self.cf_acc = Accuracy()
         # self.proximity = ProximityMetric()
 
+        # "all" (default) | "neg_only" (only y==0 used to train generator)
+        self.cf_target_filter = configs.get("cf_target_filter", "all")
+
     def forward(self, x, hard: bool=False):
         """hard: categorical features in counterfactual is one-hot-encoding or not"""
         y, c = self.model_forward(x)
@@ -218,9 +221,43 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
     def training_step(self, batch, batch_idx, optimizer_idx):
         # batch
         x, y = batch
-        # fwd
+        # forward pass on full batch
         y_hat, c = self(x)
-        # loss
+
+        # --------- Ablation: CF generator only on negative examples ---------
+        if getattr(self, "cf_target_filter", "all") == "neg_only":
+            neg_mask = (y == 0)
+
+            # loss on the full batch
+            l_1_all, l_2_all, l_3_all = self._loss_functions(x, c, y, y_hat)
+
+            # loss restricted to negative data (for generator)
+            if neg_mask.any():
+                x_neg = x[neg_mask]
+                c_neg = c[neg_mask]
+                y_neg = y[neg_mask]
+                y_hat_neg = y_hat[neg_mask]
+
+                _, l_2_neg, l_3_neg = self._loss_functions(
+                    x_neg, c_neg, y_neg, y_hat_neg
+                )
+            else:
+                # no negatives in batch -> skip
+                device = y_hat.device
+                l_2_neg = torch.tensor(0.0, device=device)
+                l_3_neg = torch.tensor(0.0, device=device)
+
+            if optimizer_idx == 0:
+                result = self.predictor_step(l_1_all, l_3_all)
+
+            if optimizer_idx == 1:
+                result = self.explainer_step(l_2_neg, l_3_neg)
+
+            self._logging_loss(l_1_all, l_2_all, l_3_all,
+                               stage='train', on_step=False)
+            return result
+
+        # --------- Default ---------
         l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat)
 
         result = 0
@@ -230,9 +267,10 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         if optimizer_idx == 1:
             result = self.explainer_step(l_2, l_3)
 
-        # Logging to TensorBoard by default
+        # Logging to TensorBoard
         self._logging_loss(l_1, l_2, l_3, stage='train', on_step=False)
         return result
+
 
     def validation_step(self, batch, batch_idx):
         # batch

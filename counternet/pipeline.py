@@ -47,7 +47,7 @@ def load_trained_model(module: BaseModule, checkpoint_path: str, gpus: int = 0) 
 def coord_sparsity_and_manifold(pred_model: BaseModule,
                                 x: torch.Tensor,
                                 cf: torch.Tensor,
-                                eps: float = 0.1,
+                                eps: float = 0.05,
                                 n_neighbors: int = 1) -> tuple[float, float]:
     """
     Compute sparsity and manifold distance in the input space
@@ -312,7 +312,7 @@ class LocalCFGenerator(CFGeneratorBase):
             'cat_idx': sensitivity.cat_idx,
         })
 
-        eps = self.configs.get('sparsity_eps', 0.1)
+        eps = self.configs.get('sparsity_eps', 0.05)
         k = self.configs.get('manifold_k', 1)
         sparsity_val, man_dist = coord_sparsity_and_manifold(
             self.pred_model, x, cf, eps=eps, n_neighbors=k
@@ -380,7 +380,7 @@ class GlobalCFGenerator(CFGeneratorBase):
         })
         self.results.update({'total_time': total_time, 'avg_time': avg_time})
 
-        eps = self.configs.get('sparsity_eps', 0.1)
+        eps = self.configs.get('sparsity_eps', 0.05)
         k = self.configs.get('manifold_k', 1)
         sparsity_val, man_dist = coord_sparsity_and_manifold(
             self.pred_model, x, cf, eps=eps, n_neighbors=k

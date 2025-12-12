@@ -13,9 +13,29 @@ from counternet.pipeline import (
     load_trained_model,
 )
 from counternet.cf_explainer import VanillaCF
-
 from pytorch_lightning import seed_everything
+from typing import Optional
 
+def apply_ablation_to_config(m_config: dict, ablation: Optional[str]) -> dict:
+    """
+    Model ablation options
+
+    Current options:
+      - None: no ablation
+      - "cfgen_neg_only": train CF generator only on negative examples
+    """
+    if ablation is None:
+        return m_config
+
+    m_config = dict(m_config)
+
+    if ablation == "cfgen_neg_only":
+        m_config["cf_target_filter"] = "neg_only"
+    else:
+        raise ValueError(f"Unknown ablation mode: {ablation}")
+
+    m_config["ablation_tag"] = ablation
+    return m_config
 
 def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int) -> Path:
     """
@@ -51,12 +71,18 @@ def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int
     return candidates[-1]
 
 def train_full_experiment(m_config_path: Path, t_config_path: Path,
-                          results_root: Path, seed: int, debug: bool) -> None:
+                          results_root: Path, seed: int, debug: bool,
+                          ablation: Optional[str]) -> None:
     """Train CounterNet + baseline + run CF experiment"""
     m_config = load_configs(m_config_path)
     t_config = load_configs(t_config_path)
 
-    print(f"[TRAIN] Running Experiment on dataset='{m_config['dataset_name']}', seed={seed}")
+    m_config = apply_ablation_to_config(m_config, ablation)
+
+    print(
+        f"[TRAIN] Running Experiment on dataset='{m_config['dataset_name']}', "
+        f"seed={seed}, ablation={ablation}"
+    )
     experiment = Experiment(
         explainers=[CounterNetModel, VanillaCF],
         m_configs=[m_config],
@@ -78,18 +104,19 @@ def train_full_experiment(m_config_path: Path, t_config_path: Path,
 
 def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
                          results_root: Path, seed: int,
-                         ckpt_arg: str, debug: bool) -> None:
+                         ckpt_arg: str, debug: bool,
+                         ablation: Optional[str]) -> None:
     """
     Load CounterNet checkpoint and re-run:
       - global CFs (CounterNet as global explainer)
       - local CFs (VanillaCF on baseline predictive model)
     """
-
-    # 0) Align dataset split with training
     seed_everything(seed, workers=True)
 
     m_config = load_configs(m_config_path)
     t_config = load_configs(t_config_path)
+
+    m_config = apply_ablation_to_config(m_config, ablation)
     dataset_name = m_config["dataset_name"]
 
     # 1) Train a baseline predictive model for VanillaCF
@@ -174,6 +201,14 @@ def parse_args(argv=None):
         action="store_true",
         help="Debug mode: CF generators only run on a few samples.",
     )
+    parser.add_argument(
+        "--ablation",
+        type=str,
+        default=None,
+        choices=["cfgen_neg_only"],
+        help=("cfgen_neg_only: only use negative (result=0) examples to train the CF generator."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -187,6 +222,7 @@ def main(argv=None):
             results_root=args.results_root,
             seed=args.seed,
             debug=args.debug,
+            ablation=args.ablation,
         )
     else:
         eval_from_checkpoint(
@@ -196,8 +232,8 @@ def main(argv=None):
             seed=args.seed,
             ckpt_arg=args.ckpt,
             debug=args.debug,
+            ablation=args.ablation,
         )
-
 
 if __name__ == "__main__":
     main(sys.argv[1:])
@@ -211,3 +247,6 @@ if __name__ == "__main__":
 
     # explicit checkpoint selection
     # python run_home_counternet.py --ckpt assets/results/home/seed-0/epoch=2-step=59.ckpt
+
+    # ablation
+    # python run_home_counternet.py --retrain --ablation cfgen_neg_only
