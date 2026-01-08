@@ -44,47 +44,68 @@ def load_trained_model(module: BaseModule, checkpoint_path: str, gpus: int = 0) 
     module.eval()
     return module
 
+
 def coord_sparsity_and_manifold(pred_model: BaseModule,
                                 x: torch.Tensor,
                                 cf: torch.Tensor,
+                                target_y: Optional[torch.Tensor] = None,
+                                ref_model: Optional[BaseModule] = None,
                                 eps: float = 0.05,
                                 n_neighbors: int = 1) -> tuple[float, float]:
     """
-    Compute sparsity and manifold distance in the input space
+    Sparsity + manifold distance.
 
-    - Sparsity:
-        sparsity = 1 - E[#( |cf - x| > eps ) / d]
+    Sparsity:
+        1 - E[#(|cf - x| > eps) / d]
 
-    - Manifold distance:
-        mean L1 distance from each CF to its nearest neighbor in the training set.
+    Manifold distance:
+        For each CF, compute L1 distance to the nearest neighbor among the
+        training set restricted to label == target_y.
     """
     # Clamp to [0, 1]
     x_clamped = x.clamp(0.0, 1.0)
     cf_clamped = cf.clamp(0.0, 1.0)
 
     # ---- Sparsity ----
-    delta = (cf_clamped - x_clamped).abs() # (n_samples, d)
+    delta = (cf_clamped - x_clamped).abs()
     changed_mask = delta > eps
-    changed_per_sample = changed_mask.sum(dim=1) # (#changed coords per sample)
+    changed_per_sample = changed_mask.sum(dim=1)
     d = x_clamped.size(-1)
     sparsity = 1.0 - (changed_per_sample / float(d)).mean().item()
 
-    # ---- Manifold distance ----
-    train_x, train_y = pred_model.train_dataset[:]
+    # ---- Reference training set ----
+    ref = ref_model if ref_model is not None else pred_model
+    train_x, train_y = ref.train_dataset[:]
     train_x_clamped = train_x.clamp(0.0, 1.0)
 
-    Z_train = _to_feature_space(pred_model, train_x_clamped)
-    Z_cf = _to_feature_space(pred_model, cf_clamped)
+    train_np = train_x_clamped.detach().cpu().numpy()
+    train_y_np = train_y.detach().view(-1).cpu().numpy().astype(int)
+    cf_np = cf_clamped.detach().cpu().numpy()
 
-    Z_train_np = Z_train.detach().cpu().numpy()
-    Z_cf_np = Z_cf.detach().cpu().numpy()
+    target_np = target_y.detach().view(-1).cpu().numpy().astype(int)
+    if cf_np.shape[0] != target_np.shape[0]:
+        raise ValueError(f"target_y has length {target_np.shape[0]} but cf has {cf_np.shape[0]} samples")
 
-    nn = NearestNeighbors(n_neighbors=n_neighbors, metric="manhattan")
-    nn.fit(Z_train_np)
-    dists, _ = nn.kneighbors(Z_cf_np)
-    manifold_dist = float(dists.mean())
+    # Compute per-target-class NN distances
+    dists_out = np.full((cf_np.shape[0],), np.nan, dtype=np.float32)
+    for t in np.unique(target_np):
+        cf_idx = np.where(target_np == t)[0]
+        if cf_idx.size == 0:
+            continue
 
+        train_idx = np.where(train_y_np == t)[0]
+        if train_idx.size == 0:
+            continue
+
+        k_eff = min(int(n_neighbors), int(train_idx.size))
+        nn = NearestNeighbors(n_neighbors=k_eff, metric="manhattan")
+        nn.fit(train_np[train_idx])
+        dists, _ = nn.kneighbors(cf_np[cf_idx])
+        dists_out[cf_idx] = dists[:, -1]  # kth-NN within target class
+
+    manifold_dist = float(np.nanmean(dists_out)) if not np.all(np.isnan(dists_out)) else float('nan')
     return sparsity, manifold_dist
+
 
 def _to_feature_space(pred_model: BaseModule, X: torch.Tensor) -> torch.Tensor:
     """
@@ -214,9 +235,12 @@ class CFGeneratorBase(ABC):
     }
 
     def __init__(self, cf_algo: ExplainerBase,
-            pred_model: BaselinePredictiveModel, configs: Dict[str, Any] = {}):
+                 pred_model: BaselinePredictiveModel,
+                 configs: Dict[str, Any] = {}, ref_model:
+                Optional[BaselinePredictiveModel] = None):
         self.configs = configs
         self.pred_model = pred_model
+        self.ref_model = ref_model if ref_model is not None else pred_model
         self.pred_model.freeze()
 
         self.cf_algo = cf_algo
@@ -230,8 +254,10 @@ class CFGeneratorBase(ABC):
 # Cell
 class LocalCFGenerator(CFGeneratorBase):
     def __init__(self, cf_algo: LocalExplainerBase,
-            pred_model: BaselinePredictiveModel, configs: Dict[str, Any] = {}):
-        super().__init__(cf_algo, pred_model, configs)
+        pred_model: BaselinePredictiveModel,
+        configs: Dict[str, Any] = {},
+        ref_model: Optional[BaselinePredictiveModel] = None):
+        super().__init__(cf_algo, pred_model, configs, ref_model=ref_model)
         # define cf_algo
         if not issubclass(type(cf_algo), LocalExplainerBase):
             raise ValueError(f"cf_algo should be an instance of `{LocalExplainerBase}`, but got `{type(cf_algo)}`. ")
@@ -295,9 +321,15 @@ class LocalCFGenerator(CFGeneratorBase):
         _, y = dataset[:]
         y = y[:size]
         y_hat = self.pred_model.predict(x)
-        cf_y = flip_binary(y_hat)
         cf_y_hat = self.pred_model.predict(cf)
+
         sensitivity = self.pred_model.sensitivity
+        sensitivity.reset()
+
+        if self.configs.get("cf_target_filter") == "flip_neg_stay_pos":
+            cf_y = torch.ones_like(y_hat)
+        else:
+            cf_y = flip_binary(y_hat)
 
         self.results.update({
             'x': x,
@@ -307,15 +339,15 @@ class LocalCFGenerator(CFGeneratorBase):
             'cf_y': cf_y,
             'cf_y_hat': cf_y_hat,
         })
-        self.results.update({
-            'sensitivity': sensitivity(x, cf, cf_y).item(),
-            'cat_idx': sensitivity.cat_idx,
-        })
+        self.results.update({'sensitivity': sensitivity(x, cf, cf_y).item()})
 
         eps = self.configs.get('sparsity_eps', 0.05)
         k = self.configs.get('manifold_k', 1)
         sparsity_val, man_dist = coord_sparsity_and_manifold(
-            self.pred_model, x, cf, eps=eps, n_neighbors=k
+            self.pred_model, x, cf,
+            target_y=cf_y,
+            ref_model=self.ref_model,
+            eps=eps, n_neighbors=k
         )
         self.results.update({
             'sparsity': sparsity_val,
@@ -332,14 +364,15 @@ def is_predictive_model(model: BaseModule):
 # Cell
 class GlobalCFGenerator(CFGeneratorBase):
     def __init__(self, cf_algo: GlobalExplainerBase,
-            pred_model: Optional[BaselinePredictiveModel] = None, configs: Dict[str, Any] = {}) -> None:
+            pred_model: Optional[BaselinePredictiveModel] = None, configs: Dict[str, Any] = {},
+                 ref_model: Optional[BaselinePredictiveModel] = None) -> None:
         if not issubclass(type(cf_algo), GlobalExplainerBase):
             raise ValueError(f"cf_algo should be an instance of `{GlobalCFGenerator}`, but got `{type(cf_algo)}`")
         if not is_predictive_model(cf_algo) and pred_model is None:
             raise ValueError(f"pred_model should be passed when cf_algo is {type(cf_algo)}.")
         if is_predictive_model(cf_algo):
             pred_model = cf_algo
-        super().__init__(cf_algo, pred_model, configs)
+        super().__init__(cf_algo, pred_model, configs, ref_model=ref_model)
 
     def generate(self, dataset: Optional[TensorDataset]=None, test_size: Optional[int] = None, debug: bool = False):
         if dataset is None:
@@ -362,9 +395,15 @@ class GlobalCFGenerator(CFGeneratorBase):
         avg_time = total_time / size
 
         y_hat = self.pred_model.predict(x)
-        cf_y = flip_binary(y_hat)
         cf_y_hat = self.pred_model.predict(cf)
+
         sensitivity = self.pred_model.sensitivity
+        sensitivity.reset()
+
+        if self.configs.get("cf_target_filter") == "flip_neg_stay_pos":
+            cf_y = torch.ones_like(y_hat)
+        else:
+            cf_y = flip_binary(y_hat)
 
         self.results.update({
             'x': x,
@@ -374,16 +413,16 @@ class GlobalCFGenerator(CFGeneratorBase):
             'cf_y': cf_y,
             'cf_y_hat': cf_y_hat,
         })
-        self.results.update({
-            'sensitivity': sensitivity(x, cf, cf_y).item(),
-            'cat_idx': sensitivity.cat_idx,
-        })
+        self.results.update({'sensitivity': sensitivity(x, cf, cf_y).item()})
         self.results.update({'total_time': total_time, 'avg_time': avg_time})
 
         eps = self.configs.get('sparsity_eps', 0.05)
         k = self.configs.get('manifold_k', 1)
         sparsity_val, man_dist = coord_sparsity_and_manifold(
-            self.pred_model, x, cf, eps=eps, n_neighbors=k
+            self.pred_model, x, cf,
+            target_y=cf_y,
+            ref_model=self.ref_model,
+            eps=eps, n_neighbors=k
         )
         self.results.update({
             'sparsity': sparsity_val,
@@ -412,6 +451,9 @@ class Evaluator(object):
             'proximity',
             'sparsity',
             'manifold_dist',
+            'validity_recourse', # fraction of y==0 that reach class 1
+            'stability_pos', # fraction of y==1 that stay class 1
+            'validity_goal_pos',  # negatives reach 1, positives stay 1
         ]
         # ['diffs', 'total_num']
 
@@ -452,6 +494,26 @@ class Evaluator(object):
         # sparsity + manifold distance
         r['sparsity'][cf_name] = float(results['sparsity'])
         r['manifold_dist'][cf_name] = float(results['manifold_dist'])
+
+        # do CFs reach the positive class
+        neg_mask = (y == 0)
+        if neg_mask.any():
+            target_pos = torch.ones_like(cf_y_hat[neg_mask])
+            r['validity_recourse'][cf_name] = accuracy(target_pos.int(), cf_y_hat[neg_mask].int()).item()
+        else:
+            r['validity_recourse'][cf_name] = float('nan')
+
+        # do CFs stay in the positive class for ground truth positives
+        pos_mask = (y == 1)
+        if pos_mask.any():
+            target_pos = torch.ones_like(cf_y_hat[pos_mask])
+            r['stability_pos'][cf_name] = accuracy(target_pos.int(), cf_y_hat[pos_mask].int()).item()
+        else:
+            r['stability_pos'][cf_name] = float('nan')
+
+        # (negatives should flip to 1; positives should remain 1)
+        target = torch.where(y == 0, torch.ones_like(y), y)  # == 1 for all in binary case
+        r['validity_goal_pos'][cf_name] = accuracy(target.int(), cf_y_hat.int()).item()
 
         final_result_df = pd.DataFrame.from_dict(r)
         print(tabulate(final_result_df.astype("float16"), headers = 'keys', tablefmt = 'pretty'))
@@ -544,11 +606,11 @@ class Experiment(object):
                     f"[WARN] Failed to reload best checkpoint from {best_model_path}: {e}"
                 )
 
-            cf_generator = GlobalCFGenerator(model)
+            cf_generator = GlobalCFGenerator(model, configs=m_config, ref_model=pred_model)
 
         else:
             print(f"Generating local explanation for {CFExplainer}")
-            cf_generator = LocalCFGenerator(CFExplainer(pred_model.predict), pred_model)
+            cf_generator = LocalCFGenerator(CFExplainer(pred_model.predict), pred_model, configs=m_config, ref_model=pred_model)
         results = cf_generator.generate(debug=self.debug)
         self.evaluator.eval(results, dir_path)
 

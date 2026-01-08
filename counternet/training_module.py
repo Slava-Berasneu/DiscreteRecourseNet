@@ -219,30 +219,29 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         return e_loss
 
     def training_step(self, batch, batch_idx, optimizer_idx):
-        # batch
         x, y = batch
-        # forward pass on full batch
         y_hat, c = self(x)
 
-        # --------- Ablation: CF generator only on negative examples ---------
-        if getattr(self, "cf_target_filter", "all") == "neg_only":
+        # --------- Ablations over CF-generator training targets ---------
+        # Modes:
+        #   - "all": optimize generator on all samples
+        #   - "neg_only": optimize generator only on negatives (y==0)
+        #   - "validity_neg_only": optimize proximity on all samples, but only apply the label-flip validity loss on negatives
+        filter_mode = getattr(self, "cf_target_filter", "all")
+        if filter_mode in ("neg_only", "validity_neg_only"):
             neg_mask = (y == 0)
 
-            # loss on the full batch
+            # loss on full batch
             l_1_all, l_2_all, l_3_all = self._loss_functions(x, c, y, y_hat)
 
-            # loss restricted to negative data (for generator)
+            # negative-only losses
             if neg_mask.any():
                 x_neg = x[neg_mask]
                 c_neg = c[neg_mask]
                 y_neg = y[neg_mask]
                 y_hat_neg = y_hat[neg_mask]
-
-                _, l_2_neg, l_3_neg = self._loss_functions(
-                    x_neg, c_neg, y_neg, y_hat_neg
-                )
+                _, l_2_neg, l_3_neg = self._loss_functions(x_neg, c_neg, y_neg, y_hat_neg)
             else:
-                # no negatives in batch -> skip
                 device = y_hat.device
                 l_2_neg = torch.tensor(0.0, device=device)
                 l_3_neg = torch.tensor(0.0, device=device)
@@ -251,37 +250,97 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
                 result = self.predictor_step(l_1_all, l_3_all)
 
             if optimizer_idx == 1:
-                result = self.explainer_step(l_2_neg, l_3_neg)
+                if filter_mode == "neg_only":
+                    # generator sees only negatives for both proximity and validity
+                    result = self.explainer_step(l_2_neg, l_3_neg)
+                else:
+                    # generator sees all samples for proximity, but only negatives for validity
+                    result = self.explainer_step(l_2_all, l_3_neg)
 
-            self._logging_loss(l_1_all, l_2_all, l_3_all,
-                               stage='train', on_step=False)
+            self._logging_loss(l_1_all, l_2_all, l_3_all, stage='train', on_step=False)
+            return result
+
+        if filter_mode == "flip_neg_stay_pos":
+            l_1_all, l_2_all, _ = self._loss_functions(x, c, y, y_hat)
+
+            # recourse target: always positive
+            y_prime = torch.ones_like(y_hat)
+
+            _, _, l_3 = self._loss_functions(x, c, y, y_hat, y_prime=y_prime)
+
+            if optimizer_idx == 0:
+                result = self.predictor_step(l_1_all, l_3)
+            else:
+                result = self.explainer_step(l_2_all, l_3)
+
+            self._logging_loss(l_1_all, l_2_all, l_3, stage="train", on_step=False)
             return result
 
         # --------- Default ---------
         l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat)
 
-        result = 0
         if optimizer_idx == 0:
             result = self.predictor_step(l_1, l_3)
-
-        if optimizer_idx == 1:
+        else:
             result = self.explainer_step(l_2, l_3)
 
-        # Logging to TensorBoard
         self._logging_loss(l_1, l_2, l_3, stage='train', on_step=False)
         return result
 
-
     def validation_step(self, batch, batch_idx):
-        # batch
         x, y = batch
 
         # fwd
         y_hat, c = self(x, hard=True)
         c_y, _ = self(c)
 
-        # loss
-        l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat, is_val=True)
+        filter_mode = getattr(self, "cf_target_filter", "all")
+
+        if filter_mode == "flip_neg_stay_pos":
+            # flip negatives and don't flip positives
+            y_prime = torch.ones_like(y_hat)
+            l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat, y_prime=y_prime, is_val=True)
+
+            cf_target = torch.ones_like(c_y)
+
+        elif filter_mode == "validity_neg_only":
+            # l1 on all, l2 on all, l3 only on negatives (y==0)
+            l_1, l_2, _ = self._loss_functions(x, c, y, y_hat, is_val=True)
+
+            neg_mask = (y == 0)
+            if neg_mask.any():
+                x_neg = x[neg_mask]
+                c_neg = c[neg_mask]
+                y_neg = y[neg_mask]
+                y_hat_neg = y_hat[neg_mask]
+                _, _, l_3 = self._loss_functions(x_neg, c_neg, y_neg, y_hat_neg, is_val=True)
+            else:
+                l_3 = torch.tensor(0.0, device=y_hat.device)
+
+            cf_target = torch.ones_like(c_y)
+
+        elif filter_mode == "neg_only":
+            # l1 on all, (l2,l3) only on negatives (y==0)
+            l_1, _, _ = self._loss_functions(x, c, y, y_hat, is_val=True)
+
+            neg_mask = (y == 0)
+            if neg_mask.any():
+                x_neg = x[neg_mask]
+                c_neg = c[neg_mask]
+                y_neg = y[neg_mask]
+                y_hat_neg = y_hat[neg_mask]
+                _, l_2, l_3 = self._loss_functions(x_neg, c_neg, y_neg, y_hat_neg, is_val=True)
+            else:
+                l_2 = torch.tensor(0.0, device=y_hat.device)
+                l_3 = torch.tensor(0.0, device=y_hat.device)
+
+            cf_target = torch.ones_like(c_y)
+
+        else:
+            # flip predicted label
+            l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat, is_val=True)
+            cf_target = flip_binary(y_hat)
+
         loss = self.lambda_1 * l_1 + self.lambda_2 * l_2 + self.lambda_3 * l_3
 
         # logging val loss
@@ -289,8 +348,11 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
 
         # metrics
         metrics = {
-            'val/val_loss': loss, 'val/pred_accuracy': accuracy(y_hat, y.int()),
-            'val/cf_proximity': proximity(x, c), 'val/sensitivity': self.sensitivity(x, c, c_y),
-            'val/cf_accuracy': accuracy(torch.round(c_y), flip_binary(y_hat).int()),
+            'val/val_loss': loss,
+            'val/pred_accuracy': accuracy(y_hat, y.int()),
+            'val/cf_proximity': proximity(x, c),
+            'val/sensitivity': self.sensitivity(x, c, c_y),
+            'val/cf_accuracy': accuracy(torch.round(c_y), cf_target.int()),
         }
         self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
+        return loss

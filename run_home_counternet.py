@@ -31,6 +31,10 @@ def apply_ablation_to_config(m_config: dict, ablation: Optional[str]) -> dict:
 
     if ablation == "cfgen_neg_only":
         m_config["cf_target_filter"] = "neg_only"
+    elif ablation == "cfgen_validity_neg_only":
+        m_config["cf_target_filter"] = "validity_neg_only"
+    elif ablation == "cfgen_flip_neg_stay_pos":
+        m_config["cf_target_filter"] = "flip_neg_stay_pos"
     else:
         raise ValueError(f"Unknown ablation mode: {ablation}")
 
@@ -205,8 +209,10 @@ def parse_args(argv=None):
         "--ablation",
         type=str,
         default=None,
-        choices=["cfgen_neg_only"],
+        choices=["cfgen_neg_only", "cfgen_validity_neg_only", "cfgen_flip_neg_stay_pos"],
         help=("cfgen_neg_only: only use negative (result=0) examples to train the CF generator."
+              "cfgen_validity_neg_only: use all examples for CF proximity, but only enforce the label-flip objective on negatives"
+              "cfgen_flip_neg_stay_pos: CF flip negatives, not flip non-negatives"
         ),
     )
     return parser.parse_args(argv)

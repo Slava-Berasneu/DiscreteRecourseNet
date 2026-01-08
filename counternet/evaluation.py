@@ -19,22 +19,33 @@ class SensitivityMetric(Metric):
         self.add_state("diffs", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def update(self, x: torch.Tensor, c: torch.Tensor, c_y: torch.Tensor):
-        # inverse transform
-        x_cont_inv = self.scaler.inverse_transform(x[:, :self.cat_idx])
-        c_cont_inv = self.scaler.inverse_transform(c[:, :self.cat_idx])
-        # a bool metrics on whether differences between x and c is smaller than the threshold
-        cont_diff = torch.abs(x_cont_inv - c_cont_inv) < self.threshold
-        # total nums of differences
-        self.total_n_changes += torch.sum(cont_diff.any(axis=1))
-        # new continous cf
-        c_cont_hat = torch.where(cont_diff, x_cont_inv, c_cont_inv)
-        c[:, :self.cat_idx] = self.scaler.transform(c_cont_hat)
-        c_y_hat = self.predict_fn(c)
+        c_local = c.clone()
 
-        self.diffs += (torch.round(c_y) != torch.round(c_y_hat)).sum()
+        x_cont_inv = self.scaler.inverse_transform(x[:, :self.cat_idx])
+        c_cont_inv = self.scaler.inverse_transform(c_local[:, :self.cat_idx])
+
+        cont_diff = torch.abs(x_cont_inv - c_cont_inv) < self.threshold
+        mask = cont_diff.any(dim=1)  # samples with at least one small change
+
+        n = mask.sum()
+        if n == 0:
+            return
+
+        self.total_n_changes += n
+
+        c_cont_hat = torch.where(cont_diff, x_cont_inv, c_cont_inv)
+        c_local[:, :self.cat_idx] = self.scaler.transform(c_cont_hat)
+
+        c_y_hat = self.predict_fn(c_local)
+
+        self.diffs += (torch.round(c_y[mask]) != torch.round(c_y_hat[mask])).sum()
+
 
     def compute(self):
+        if self.total_n_changes == 0:
+            return torch.tensor(1.0, device=self.diffs.device)
         return 1 - self.diffs / self.total_n_changes
+
 
 # Comes from 02b_counter_net.ipynb, cell
 def proximity(x:torch.Tensor, c: torch.Tensor):
