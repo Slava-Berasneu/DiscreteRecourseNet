@@ -14,15 +14,40 @@ from counternet.pipeline import (
 )
 from counternet.cf_explainer import VanillaCF
 from pytorch_lightning import seed_everything
-from typing import Optional
+from typing import Optional, List
+
+def resolve_dataset_config_paths(
+    dataset_config: Path,
+    dataset_configs: Optional[List[Path]] = None,
+    datasets: Optional[List[str]] = None,
+) -> List[Path]:
+    """
+    Resolve which dataset config JSON files to run.
+    """
+    if dataset_configs:
+        return [Path(p) for p in dataset_configs]
+
+    if datasets:
+        resolved_paths = []
+        for name in datasets:
+            # main config directory
+            p_main = Path("assets/configs") / f"{name}.json"
+            # extra directory
+            p_extra = Path("assets/configs/extra") / f"{name}.json"
+
+            if p_main.exists():
+                resolved_paths.append(p_main)
+            elif p_extra.exists():
+                resolved_paths.append(p_extra)
+            else:
+                resolved_paths.append(p_main)
+        return resolved_paths
+
+    return [Path(dataset_config)]
 
 def apply_ablation_to_config(m_config: dict, ablation: Optional[str]) -> dict:
     """
     Model ablation options
-
-    Current options:
-      - None: no ablation
-      - "cfgen_neg_only": train CF generator only on negative examples
     """
     if ablation is None:
         return m_config
@@ -143,14 +168,25 @@ def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
 
     # 4) Global CFs with CounterNet
     print("[EVAL] Generating global counterfactuals with CounterNet...")
-    global_cf_gen = GlobalCFGenerator(cfnet_model)
+    global_cf_gen = GlobalCFGenerator(
+        cfnet_model,
+        configs = m_config,
+        ref_model = pred_model,
+    )
     global_results = global_cf_gen.generate(debug=debug)
     evaluator.eval(global_results, run_dir)
     print("[EVAL] Global CF metrics updated in metrics.csv")
 
     # 5) Local CFs with VanillaCF + baseline predictive model
     print("[EVAL] Generating local counterfactuals with VanillaCF...")
-    local_cf_gen = LocalCFGenerator(VanillaCF(pred_model.predict), pred_model)
+    local_cfg = dict(m_config)
+    local_cfg.pop("cf_target_filter", None)
+    local_cf_gen = LocalCFGenerator(
+        VanillaCF(pred_model.predict),
+        pred_model,
+        configs = local_cfg,
+        ref_model = pred_model,
+    )
     local_results = local_cf_gen.generate(debug=debug)
     evaluator.eval(local_results, run_dir)
     print("[EVAL] Local CF metrics updated in metrics.csv")
@@ -167,6 +203,27 @@ def parse_args(argv=None):
         type=Path,
         default=Path("assets/configs/home.json"),
         help="Path to dataset/model config JSON (default: assets/configs/home.json)",
+    )
+    parser.add_argument(
+        "--dataset-configs",
+        type = Path,
+        nargs = "+",
+        default = None,
+        help = (
+            "Run multiple datasets by providing multiple config JSON paths."
+            "Example: --dataset-configs assets/configs/adult.json assets/configs/credit_card.json"
+        ),
+    )
+    parser.add_argument(
+"--datasets",
+        type = str,
+        nargs = "+",
+        choices = ["adult", "credit_card", "home", "student"],
+        default = None,
+        help = (
+            "Run a predefined set of datasets (mapped to assets/configs/<name>.json)."
+            "Choices: adult, credit_card, home, student"
+        ),
     )
     parser.add_argument(
         "--trainer-config",
@@ -221,38 +278,48 @@ def parse_args(argv=None):
 def main(argv=None):
     args = parse_args(argv)
 
-    if args.retrain:
-        train_full_experiment(
-            m_config_path=args.dataset_config,
-            t_config_path=args.trainer_config,
-            results_root=args.results_root,
-            seed=args.seed,
-            debug=args.debug,
-            ablation=args.ablation,
+    dataset_config_paths = resolve_dataset_config_paths(
+        dataset_config=args.dataset_config,
+        dataset_configs=args.dataset_configs,
+        datasets=args.datasets,
+    )
+
+    if args.ckpt is not None and len(dataset_config_paths) > 1:
+        raise ValueError(
+            "--ckpt is only supported when running a single dataset."
+            "For multiple datasets, omit --ckpt and let the script pick per-dataset checkpoints"
+            "from --results-root/<dataset>/seed-<seed>/, or run with --retrain."
         )
-    else:
-        eval_from_checkpoint(
-            m_config_path=args.dataset_config,
-            t_config_path=args.trainer_config,
-            results_root=args.results_root,
-            seed=args.seed,
-            ckpt_arg=args.ckpt,
-            debug=args.debug,
-            ablation=args.ablation,
-        )
+
+    for m_config_path in dataset_config_paths:
+        if args.retrain:
+            train_full_experiment(
+                m_config_path=m_config_path,
+                t_config_path=args.trainer_config,
+                results_root=args.results_root,
+                seed=args.seed,
+                debug=args.debug,
+                ablation=args.ablation,
+            )
+        else:
+            eval_from_checkpoint(
+                m_config_path=m_config_path,
+                t_config_path=args.trainer_config,
+                results_root=args.results_root,
+                seed=args.seed,
+                ckpt_arg=args.ckpt,
+                debug=args.debug,
+                ablation=args.ablation,
+            )
+
 
 if __name__ == "__main__":
     main(sys.argv[1:])
     # training example usage
-    # python run_home_counternet.py --retrain
-    # python run_home_counternet.py --retrain --debug --results-root assets/results_debug
+    # python run_home_counternet.py --retrain --datasets adult credit_card home student
 
     # reusing checkpoints
-    # python run_home_counternet.py
-    # python run_home_counternet.py --debug --results-root assets/results
-
-    # explicit checkpoint selection
-    # python run_home_counternet.py --ckpt assets/results/home/seed-0/epoch=2-step=59.ckpt
+    # python run_home_counternet.py --datasets adult credit_card home student
 
     # ablation
-    # python run_home_counternet.py --retrain --ablation cfgen_neg_only
+    # python run_home_counternet.py --retrain --datasets adult credit_card home student --ablation cfgen_neg_only

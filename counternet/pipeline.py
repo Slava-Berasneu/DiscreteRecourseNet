@@ -268,6 +268,13 @@ class LocalCFGenerator(CFGeneratorBase):
 
         self.is_parallel = configs['is_parallel'] if 'is_parallel' in configs else True
 
+    def _gen_batch(self, batch_x):
+        batch_results = []
+        for x in batch_x:
+            x_res, cf_res = self.gen_step(x)
+            batch_results.append((x_res, cf_res))
+        return batch_results
+
     def gen_step(self, x):
         x = x.reshape(1, -1)
         cf = self.cf_algo.generate_cf(x)
@@ -303,14 +310,25 @@ class LocalCFGenerator(CFGeneratorBase):
 
         result = []
 
+        data_list = []
+        for i, (x, y) in enumerate(dataset):
+            if i >= size: break
+            data_list.append(x)
+
         if self.is_parallel and not debug:
-            print(f"generating {size} cfs in parallel...")
-            result = Parallel(n_jobs=-1, max_nbytes=None, verbose=False)(
-                delayed(self.gen_step) (x=x)
-                for ix, (x, y) in enumerate(tqdm(dataset)) if ix < size
+            print(f"generating {len(data_list)} cfs in parallel...")
+
+            batch_size = 100
+            batches = [data_list[i:i + batch_size] for i in range(0, len(data_list), batch_size)]
+
+            batch_results = Parallel(n_jobs=-1, verbose=5)(
+                delayed(self._gen_batch)(batch) for batch in batches
             )
-            print(f"evaluating speed by generating 50 cfs...")
-            _, time = self.iterative_generate(50, dataset)
+
+            result = [item for sublist in batch_results for item in sublist]
+
+            time = {'total_time': 0, 'avg_time': 0}
+
         else:
             print(f"generating {size} cfs...")
             result, time = self.iterative_generate(size, dataset)
@@ -343,12 +361,20 @@ class LocalCFGenerator(CFGeneratorBase):
 
         eps = self.configs.get('sparsity_eps', 0.05)
         k = self.configs.get('manifold_k', 1)
-        sparsity_val, man_dist = coord_sparsity_and_manifold(
-            self.pred_model, x, cf,
-            target_y=cf_y,
-            ref_model=self.ref_model,
-            eps=eps, n_neighbors=k
-        )
+        neg_mask = (y_hat == 0).reshape(-1)
+
+        if neg_mask.sum() > 0:
+            sparsity_val, man_dist = coord_sparsity_and_manifold(
+                self.pred_model,
+                x[neg_mask],
+                cf[neg_mask],
+                target_y=cf_y[neg_mask],
+                ref_model=self.ref_model,
+                eps=eps, n_neighbors=k
+            )
+        else:
+            sparsity_val, man_dist = float('nan'), float('nan')
+
         self.results.update({
             'sparsity': sparsity_val,
             'manifold_dist': man_dist,
@@ -418,12 +444,21 @@ class GlobalCFGenerator(CFGeneratorBase):
 
         eps = self.configs.get('sparsity_eps', 0.05)
         k = self.configs.get('manifold_k', 1)
-        sparsity_val, man_dist = coord_sparsity_and_manifold(
-            self.pred_model, x, cf,
-            target_y=cf_y,
-            ref_model=self.ref_model,
-            eps=eps, n_neighbors=k
-        )
+
+        neg_mask = (y_hat == 0).reshape(-1) # evaluate only on negatives
+
+        if neg_mask.sum() > 0:
+            sparsity_val, man_dist = coord_sparsity_and_manifold(
+                self.pred_model,
+                x[neg_mask],
+                cf[neg_mask],
+                target_y=cf_y[neg_mask],
+                ref_model=self.ref_model,
+                eps=eps, n_neighbors=k
+            )
+        else:
+            sparsity_val, man_dist = float('nan'), float('nan')
+
         self.results.update({
             'sparsity': sparsity_val,
             'manifold_dist': man_dist,
@@ -444,16 +479,16 @@ class Evaluator(object):
         metrics = [
             'cat_proximity',
             'cont_proximity',
-            'validity',
+            #'validity',
             'sensitivity',
             'time',
             'pred_accuracy',
             'proximity',
             'sparsity',
             'manifold_dist',
-            'validity_recourse', # fraction of y==0 that reach class 1
-            'stability_pos', # fraction of y==1 that stay class 1
-            'validity_goal_pos',  # negatives reach 1, positives stay 1
+            'validity_recourse', # fraction of y_hat==0 that reach class 1
+            'stability_pos', # fraction of y_hat==1 that stay class 1
+            #'validity_goal_pos',  # y_hat==0 reach 1, y_hat==1 stay 1
         ]
         # ['diffs', 'total_num']
 
@@ -476,8 +511,18 @@ class Evaluator(object):
         cat_idx, cf_name = results['cat_idx'], results['cf_algo']
 
         # --- Proximity ---
-        cont_prox = proximity(x[:, :cat_idx], cf[:, :cat_idx]).item()
-        cat_prox = proximity(x[:, cat_idx:], cf[:, cat_idx:]).item()
+        neg_mask = (y_hat == 0).reshape(-1)
+
+        if neg_mask.sum() > 0:
+            x_prox = x[neg_mask]
+            cf_prox = cf[neg_mask]
+        else:
+            x_prox = x
+            cf_prox = cf
+            print(f"[WARN] No negative predictions found for {cf_name}. Proximity computed on entire set.")
+
+        cont_prox = proximity(x_prox[:, :cat_idx], cf_prox[:, :cat_idx]).item()
+        cat_prox = proximity(x_prox[:, cat_idx:], cf_prox[:, cat_idx:]).item()
         r['cont_proximity'][cf_name] = cont_prox
         r['cat_proximity'][cf_name] = cat_prox
 
@@ -486,7 +531,7 @@ class Evaluator(object):
         r['proximity'][cf_name] = (cont_prox + cat_prox) / float(n_features)
 
         # other metrics
-        r['validity'][cf_name] = accuracy(cf_y.int(), cf_y_hat.int()).item()
+        #r['validity'][cf_name] = accuracy(cf_y.int(), cf_y_hat.int()).item()
         r['sensitivity'][cf_name] = results['sensitivity']
         r['time'][cf_name] = results['avg_time']
         r['pred_accuracy'][cf_name] = accuracy(y.int(), y_hat.int()).item()
@@ -495,25 +540,24 @@ class Evaluator(object):
         r['sparsity'][cf_name] = float(results['sparsity'])
         r['manifold_dist'][cf_name] = float(results['manifold_dist'])
 
-        # do CFs reach the positive class
-        neg_mask = (y == 0)
+        # do CFs reach the positive class for those predicted as negative
+        neg_mask = (y_hat == 0)
         if neg_mask.any():
             target_pos = torch.ones_like(cf_y_hat[neg_mask])
             r['validity_recourse'][cf_name] = accuracy(target_pos.int(), cf_y_hat[neg_mask].int()).item()
         else:
             r['validity_recourse'][cf_name] = float('nan')
 
-        # do CFs stay in the positive class for ground truth positives
-        pos_mask = (y == 1)
+        # do CFs stay in the positive class for predicted positives
+        pos_mask = (y_hat == 1)
         if pos_mask.any():
             target_pos = torch.ones_like(cf_y_hat[pos_mask])
             r['stability_pos'][cf_name] = accuracy(target_pos.int(), cf_y_hat[pos_mask].int()).item()
         else:
             r['stability_pos'][cf_name] = float('nan')
 
-        # (negatives should flip to 1; positives should remain 1)
-        target = torch.where(y == 0, torch.ones_like(y), y)  # == 1 for all in binary case
-        r['validity_goal_pos'][cf_name] = accuracy(target.int(), cf_y_hat.int()).item()
+        #target_all_pos = torch.ones_like(cf_y_hat)
+        #r['validity_goal_pos'][cf_name] = accuracy(target_all_pos.int(), cf_y_hat.int()).item()
 
         final_result_df = pd.DataFrame.from_dict(r)
         print(tabulate(final_result_df.astype("float16"), headers = 'keys', tablefmt = 'pretty'))
@@ -610,7 +654,15 @@ class Experiment(object):
 
         else:
             print(f"Generating local explanation for {CFExplainer}")
-            cf_generator = LocalCFGenerator(CFExplainer(pred_model.predict), pred_model, configs=m_config, ref_model=pred_model)
+            local_cfg = dict(m_config)
+            if CFExplainer is VanillaCF:
+                local_cfg.pop("cf_target_filter", None)
+            cf_generator = LocalCFGenerator(
+                CFExplainer(pred_model.predict),
+                pred_model,
+                configs=local_cfg,
+                ref_model=pred_model
+            )
         results = cf_generator.generate(debug=self.debug)
         self.evaluator.eval(results, dir_path)
 
