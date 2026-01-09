@@ -268,13 +268,6 @@ class LocalCFGenerator(CFGeneratorBase):
 
         self.is_parallel = configs['is_parallel'] if 'is_parallel' in configs else True
 
-    def _gen_batch(self, batch_x):
-        batch_results = []
-        for x in batch_x:
-            x_res, cf_res = self.gen_step(x)
-            batch_results.append((x_res, cf_res))
-        return batch_results
-
     def gen_step(self, x):
         x = x.reshape(1, -1)
         cf = self.cf_algo.generate_cf(x)
@@ -310,25 +303,14 @@ class LocalCFGenerator(CFGeneratorBase):
 
         result = []
 
-        data_list = []
-        for i, (x, y) in enumerate(dataset):
-            if i >= size: break
-            data_list.append(x)
-
         if self.is_parallel and not debug:
-            print(f"generating {len(data_list)} cfs in parallel...")
-
-            batch_size = 100
-            batches = [data_list[i:i + batch_size] for i in range(0, len(data_list), batch_size)]
-
-            batch_results = Parallel(n_jobs=-1, verbose=5)(
-                delayed(self._gen_batch)(batch) for batch in batches
+            print(f"generating {size} cfs in parallel...")
+            result = Parallel(n_jobs=-1, max_nbytes=None, verbose=False)(
+                delayed(self.gen_step) (x=x)
+                for ix, (x, y) in enumerate(tqdm(dataset)) if ix < size
             )
-
-            result = [item for sublist in batch_results for item in sublist]
-
-            time = {'total_time': 0, 'avg_time': 0}
-
+            print(f"evaluating speed by generating 50 cfs...")
+            _, time = self.iterative_generate(50, dataset)
         else:
             print(f"generating {size} cfs...")
             result, time = self.iterative_generate(size, dataset)

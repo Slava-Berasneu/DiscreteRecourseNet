@@ -1,0 +1,324 @@
+{
+    "adult": {
+        "age": {
+            "mutable": false,
+            "description": "Age in years",
+            "type": "continuous",
+            "min": 17.0,
+            "max": 90.0
+        },
+        "hours_per_week": {
+            "mutable": true,
+            "description": "Weekly working hours.",
+            "type": "continuous",
+            "min": 10.0,
+            "max": 80.0,
+            "step_size": 5.0,
+            "mean": 40.4
+        },
+        "education": {
+            "mutable": true,
+            "description": "Highest education level.",
+            "type": "ordinal",
+            "direction": "increase_only",
+            "domain": [
+                "Preschool",
+                "1st-4th",
+                "5th-6th",
+                "7th-8th",
+                "9th",
+                "10th",
+                "11th",
+                "12th",
+                "HS-grad",
+                "Some-college",
+                "Assoc-voc",
+                "Assoc-acdm",
+                "Bachelors",
+                "Masters",
+                "Prof-school",
+                "Doctorate"
+            ]
+        },
+        "workclass": {
+            "mutable": true,
+            "type": "categorical",
+            "domain": [
+                "Private",
+                "Self-Employed",
+                "Government",
+                "Other/Unknown"
+            ]
+        },
+        "occupation": {
+            "mutable": true,
+            "description": "Job role.",
+            "type": "categorical",
+            "domain": [
+                "Tech-support", "Craft-repair", "Other-service", "Sales",
+                "Exec-managerial", "Prof-specialty", "Handlers-cleaners",
+                "Machine-op-inspct", "Adm-clerical", "Farming-fishing",
+                "Transport-moving", "Priv-house-serv", "Protective-serv",
+                "Armed-Forces", "Blue-Collar", "White-Collar"
+            ]
+        },
+        "marital_status": {
+            "mutable": false,
+            "type": "categorical"
+        },
+        "race": {
+            "mutable": false,
+            "type": "categorical"
+        },
+        "gender": {
+            "mutable": false,
+            "type": "categorical"
+        }
+    },
+    "home": {
+        "ExternalRiskEstimate": {
+            "mutable": false,
+            "description": "Target proxy. Higher is better",
+            "type": "continuous", "min": 0.0, "max": 100.0, "step_size": 1.0
+        },
+        "NetFractionRevolvingBurden": {
+            "mutable": true,
+            "name": "NetFractionRevolvingBurden",
+            "description": "Credit Utilization %. Lower is better.",
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 5.0
+        },
+        "NetFractionInstallBurden": {
+            "mutable": true,
+            "name": "NetFractionInstallBurden",
+            "description": "Installment debt %. Lower is better.",
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 5.0
+        },
+        "NumSatisfactoryTrades": {
+            "mutable": true,
+            "name": "NumSatisfactoryTrades",
+            "description": "Count of good trades. Can only increase.",
+            "type": "continuous",
+            "min": 0.0, "max": 60.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "MSinceMostRecentDelq": {
+            "mutable": true,
+            "name": "MSinceMostRecentDelq",
+            "description": "Months since last delinquency.",
+            "type": "continuous",
+            "min": 0.0, "max": 84.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "MaxDelq2PublicRecLast12M": {
+            "mutable": true,
+            "name": "MaxDelq2PublicRecLast12M",
+            "type": "categorical",
+            "domain": [
+                "Never Delinquent",
+                "30 Days Delinquent",
+                "60 Days Delinquent",
+                "90 Days Delinquent",
+                "120+ Days Delinquent",
+                "Derogatory Comment"
+            ],
+            "ordering": "ordinal"
+        },
+        "NumTrades60Ever2DerogPubRec": {
+            "mutable": false,
+            "description": "Historical count of bad trades. User cannot erase this.",
+            "type": "discrete"
+        },
+        "NumTrades90Ever2DerogPubRec": {
+            "mutable": false,
+            "type": "discrete"
+        },
+        "MSinceOldestTradeOpen": {
+            "mutable": true,
+            "name": "MSinceOldestTradeOpen",
+            "type": "continuous",
+            "min": 0.0, "max": 500.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        }
+    },
+    "student": {
+        "num_of_prev_attempts": {
+            "mutable": false,
+            "type": "discrete"
+        },
+        "weight": {
+            "mutable": false,
+            "description": "Assessment weight.",
+            "type": "continuous"
+        },
+        "weighted_score": {
+            "mutable": true,
+            "description": "Assessment score.",
+            "type": "continuous",
+            "min": 0.0,
+            "max": 100.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "studied_credits": {
+            "mutable": true,
+            "description": "Total load.",
+            "type": "continuous",
+            "min": 30.0,
+            "max": 240.0,
+            "step_size": 30.0
+        },
+        "highest_education": {
+            "mutable": true,
+            "description": "Prior education.",
+            "type": "ordinal",
+            "direction": "increase_only",
+            "domain": [
+                "No Formal quals",
+                "Lower Than A Level",
+                "A Level or Equivalent",
+                "HE Qualification",
+                "Post Graduate Qualification"
+            ]
+        },
+        "forumng_click": {
+            "mutable": true,
+            "name": "forumng_click",
+            "description": "Forum activity.",
+            "type": "continuous",
+            "min": 0.0, "max": 1000.0, "step_size": 5.0,
+            "direction": "increase_only"
+        },
+        "homepage_click": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 500.0, "step_size": 5.0,
+            "direction": "increase_only"
+        },
+        "oucontent_click": {
+            "mutable": true,
+            "description": "Reading course content",
+            "type": "continuous",
+            "min": 0.0, "max": 2000.0, "step_size": 10.0,
+            "direction": "increase_only"
+        },
+        "quiz_click": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 1000.0, "step_size": 5.0,
+            "direction": "increase_only"
+        },
+        "resource_click": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 500.0, "step_size": 5.0,
+            "direction": "increase_only"
+        },
+        "subpage_click": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 500.0, "step_size": 5.0
+        },
+        "url_click": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 200.0, "step_size": 1.0
+        },
+        "ouwiki_click": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 500.0, "step_size": 5.0
+        },
+        "gender": { "mutable": false, "type": "categorical" },
+        "region": { "mutable": false, "type": "categorical" },
+        "imd_band": { "mutable": false, "type": "categorical" },
+        "age_band": { "mutable": false, "type": "categorical" },
+        "disability": { "mutable": false, "type": "categorical" },
+        "code_module": { "mutable": false, "type": "categorical" },
+
+        "dataplus_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "glossary_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "oucollaborate_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "ouelluminate_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "sharedsubpage_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "questionnaire_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "page_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "externalquiz_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "dualpane_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "folder_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "repeatactivity_click": { "mutable": true, "type": "continuous", "step_size": 1.0 },
+        "htmlactivity_click": { "mutable": true, "type": "continuous", "step_size": 1.0 }
+    },
+    "credit_card": {
+        "LIMIT_BAL": {
+            "mutable": true,
+            "description": "Credit Limit. (Request limit change).",
+            "type": "continuous",
+            "min": 10000.0,
+            "max": 500000.0,
+            "step_size": 10000.0
+        },
+        "AGE": {
+            "mutable": false,
+            "type": "continuous"
+        },
+        "SEX": {
+            "mutable": false,
+            "type": "categorical"
+        },
+        "EDUCATION": {
+            "mutable": false,
+            "type": "categorical"
+        },
+        "MARRIAGE": {
+            "mutable": false,
+            "type": "categorical"
+        },
+        "PAY_0": {
+            "mutable": true,
+            "name": "PAY_0",
+            "description": "Repayment status (-2: Unused, -1: Paid Full, 0: Revolving, 1+: Late).",
+            "type": "ordinal",
+            "domain": [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8],
+            "direction": "decrease_only",
+            "step_size": 1
+        },
+        "PAY_2": { "mutable": true, "type": "ordinal", "domain": [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8], "direction": "decrease_only" },
+        "PAY_3": { "mutable": true, "type": "ordinal", "domain": [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8], "direction": "decrease_only" },
+        "PAY_4": { "mutable": true, "type": "ordinal", "domain": [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8], "direction": "decrease_only" },
+        "PAY_5": { "mutable": true, "type": "ordinal", "domain": [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8], "direction": "decrease_only" },
+        "PAY_6": { "mutable": true, "type": "ordinal", "domain": [-2, -1, 0, 1, 2, 3, 4, 5, 6, 7, 8], "direction": "decrease_only" },
+
+        "BILL_AMT1": {
+            "mutable": true,
+            "description": "Bill Amount (Sept). (Spend less)",
+            "type": "continuous",
+            "min": 0.0, "max": 300000.0, "step_size": 1000.0,
+            "direction": "decrease_only"
+        },
+        "BILL_AMT2": { "mutable": true, "type": "continuous", "step_size": 1000.0, "direction": "decrease_only" },
+        "BILL_AMT3": { "mutable": true, "type": "continuous", "step_size": 1000.0, "direction": "decrease_only" },
+        "BILL_AMT4": { "mutable": true, "type": "continuous", "step_size": 1000.0, "direction": "decrease_only" },
+        "BILL_AMT5": { "mutable": true, "type": "continuous", "step_size": 1000.0, "direction": "decrease_only" },
+        "BILL_AMT6": { "mutable": true, "type": "continuous", "step_size": 1000.0, "direction": "decrease_only" },
+
+        "PAY_AMT1": {
+            "mutable": true,
+            "description": "Amount Paid (Sept). (Pay more)",
+            "type": "continuous",
+            "min": 0.0, "max": 50000.0, "step_size": 500.0,
+            "direction": "increase_only"
+        },
+        "PAY_AMT2": { "mutable": true, "type": "continuous", "step_size": 500.0, "direction": "increase_only" },
+        "PAY_AMT3": { "mutable": true, "type": "continuous", "step_size": 500.0, "direction": "increase_only" },
+        "PAY_AMT4": { "mutable": true, "type": "continuous", "step_size": 500.0, "direction": "increase_only" },
+        "PAY_AMT5": { "mutable": true, "type": "continuous", "step_size": 500.0, "direction": "increase_only" },
+        "PAY_AMT6": { "mutable": true, "type": "continuous", "step_size": 500.0, "direction": "increase_only" }
+    }
+}

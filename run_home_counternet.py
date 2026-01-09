@@ -181,6 +181,10 @@ def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
     print("[EVAL] Generating local counterfactuals with VanillaCF...")
     local_cfg = dict(m_config)
     local_cfg.pop("cf_target_filter", None)
+
+    local_cfg['lr'] = 0.05
+    local_cfg['max_iter'] = 1000
+
     local_cf_gen = LocalCFGenerator(
         VanillaCF(pred_model.predict),
         pred_model,
