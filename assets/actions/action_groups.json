@@ -1,0 +1,71 @@
+{
+    "adult": {
+        "workclass_group": {
+            "type": 5,
+            "description": "Choice",
+            "features": ["workclass"]
+        },
+        "occupation_group": {
+            "type": 5,
+            "description": "Choice",
+            "features": ["occupation"]
+        }
+    },
+    "home": {
+        "inquiry_logic": {
+            "type": 2,
+            "description": "Composition (Subset). Excl7Days is a subset of Last6M.",
+            "master": "NumInqLast6M",
+            "derived": ["NumInqLast6Mexcl7days"],
+            "rule": "clip_to_master"
+        },
+        "trade_accounting": {
+            "type": 2,
+            "description": "Composition (Sum). Increasing satisfactory trades increases total trades.",
+            "master": "NumSatisfactoryTrades",
+            "derived": ["NumTotalTrades"],
+            "rule": "add_delta"
+        },
+        "utilization_behavior": {
+            "type": 4,
+            "description": "Latent Behavior. High utilization fraction correlates with count of maxed-out trades.",
+            "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
+            "strategy": "weighted_proportional"
+        }
+    },
+    "student": {
+        "digital_engagement": {
+            "type": 4,
+            "description": "Latent Behavior. All click counts represent 'Engagement'.",
+            "features": [
+                "forumng_click",
+                "homepage_click",
+                "subpage_click",
+                "resource_click",
+                "url_click",
+                "oucontent_click"
+            ],
+            "strategy": "proportional_increase"
+        }
+    },
+    "credit_card": {
+        "bill_smoothing": {
+            "type": 3,
+            "description": "Momentum. Bill amounts are sequential.",
+            "features": [
+                "BILL_AMT1", "BILL_AMT2", "BILL_AMT3",
+                "BILL_AMT4", "BILL_AMT5", "BILL_AMT6"
+            ],
+            "strategy": "decay_weighting"
+        },
+        "payment_smoothing": {
+            "type": 3,
+            "description": "Momentum. Payment history implies a trajectory.",
+            "features": [
+                "PAY_0", "PAY_2", "PAY_3",
+                "PAY_4", "PAY_5", "PAY_6"
+            ],
+            "strategy": "sequential_consistency"
+        }
+    }
+}

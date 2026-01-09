@@ -5,8 +5,8 @@ import os
 from pathlib import Path
 
 # --- Configuration ---
-OUTPUT_DIR = Path("assets/configs")
-OUTPUT_FILE = OUTPUT_DIR / "action_metadata.json"
+OUTPUT_DIR = Path("assets/actions")
+OUTPUT_FILE = OUTPUT_DIR / "feature_metadata.json"
 
 # Map dataset names to file paths
 DATASET_PATHS = {
@@ -119,7 +119,7 @@ def main():
     with open(OUTPUT_FILE, 'w') as f:
         json.dump(full_metadata, f, indent=4)
 
-    print(f"\nSuccess! Action metadata generated at: {OUTPUT_FILE}")
+    print(f"\nSuccess! Feature metadata generated at: {OUTPUT_FILE}")
 
 
 if __name__ == "__main__":

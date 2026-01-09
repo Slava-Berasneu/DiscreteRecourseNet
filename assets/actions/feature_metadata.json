@@ -81,6 +81,107 @@
             "description": "Target proxy. Higher is better",
             "type": "continuous", "min": 0.0, "max": 100.0, "step_size": 1.0
         },
+        "MSinceOldestTradeOpen": {
+            "mutable": true,
+            "name": "MSinceOldestTradeOpen",
+            "type": "continuous",
+            "min": 0.0, "max": 800.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "MSinceMostRecentTradeOpen": {
+            "mutable": true,
+            "description": "Months since recent trade.",
+            "type": "continuous",
+            "min": 0.0, "max": 300.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "AverageMInFile": {
+            "mutable": true,
+            "description": "Avg age of credit history.",
+            "type": "continuous",
+            "min": 0.0, "max": 300.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "NumSatisfactoryTrades": {
+            "mutable": true,
+            "name": "NumSatisfactoryTrades",
+            "description": "Count of good trades.",
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "NumTrades60Ever2DerogPubRec": {
+            "mutable": false,
+            "description": "Historical count of bad trades.",
+            "type": "discrete"
+        },
+        "NumTrades90Ever2DerogPubRec": {
+            "mutable": false,
+            "type": "discrete"
+        },
+        "PercentTradesNeverDelq": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 1.0
+        },
+        "MSinceMostRecentDelq": {
+            "mutable": true,
+            "name": "MSinceMostRecentDelq",
+            "description": "Months since last delinquency.",
+            "type": "continuous",
+            "min": 0.0, "max": 120.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "NumTotalTrades": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "NumTradesOpeninLast12M": {
+            "mutable": true,
+            "description": "New trades",
+            "type": "continuous",
+            "min": 0.0, "max": 20.0,
+            "step_size": 1.0,
+            "direction": "decrease_only"
+        },
+        "PercentInstallTrades": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 5.0
+        },
+        "MSinceMostRecentInqexcl7days": {
+            "mutable": true,
+            "description": "Months since inquiry",
+            "type": "continuous",
+            "min": 0.0, "max": 24.0,
+            "step_size": 1.0,
+            "direction": "increase_only"
+        },
+        "NumInqLast6M": {
+            "mutable": true,
+            "description": "Recent inquiries",
+            "type": "continuous",
+            "min": 0.0, "max": 20.0,
+            "step_size": 1.0,
+            "direction": "decrease_only"
+        },
+        "NumInqLast6Mexcl7days": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 20.0,
+            "step_size": 1.0,
+            "direction": "decrease_only"
+        },
         "NetFractionRevolvingBurden": {
             "mutable": true,
             "name": "NetFractionRevolvingBurden",
@@ -94,26 +195,39 @@
             "name": "NetFractionInstallBurden",
             "description": "Installment debt %. Lower is better.",
             "type": "continuous",
-            "min": 0.0, "max": 100.0,
+            "min": 0.0, "max": 150.0,
             "step_size": 5.0
         },
-        "NumSatisfactoryTrades": {
+        "NumRevolvingTradesWBalance": {
             "mutable": true,
-            "name": "NumSatisfactoryTrades",
-            "description": "Count of good trades. Can only increase.",
+            "description": "Revolving trades with balance. Action: Pay off.",
             "type": "continuous",
-            "min": 0.0, "max": 60.0,
+            "min": 0.0, "max": 20.0,
             "step_size": 1.0,
-            "direction": "increase_only"
+            "direction": "decrease_only"
         },
-        "MSinceMostRecentDelq": {
+        "NumInstallTradesWBalance": {
             "mutable": true,
-            "name": "MSinceMostRecentDelq",
-            "description": "Months since last delinquency.",
+            "description": "Installment trades with balance. Action: Pay off.",
             "type": "continuous",
-            "min": 0.0, "max": 84.0,
+            "min": 0.0, "max": 20.0,
             "step_size": 1.0,
-            "direction": "increase_only"
+            "direction": "decrease_only"
+        },
+        "NumBank2NatlTradesWHighUtilization": {
+            "mutable": true,
+            "description": "Trades with high util. Action: Pay down.",
+            "type": "continuous",
+            "min": 0.0, "max": 20.0,
+            "step_size": 1.0,
+            "direction": "decrease_only"
+        },
+        "PercentTradesWBalance": {
+            "mutable": true,
+            "type": "continuous",
+            "min": 0.0, "max": 100.0,
+            "step_size": 5.0,
+            "direction": "decrease_only"
         },
         "MaxDelq2PublicRecLast12M": {
             "mutable": true,
@@ -129,22 +243,18 @@
             ],
             "ordering": "ordinal"
         },
-        "NumTrades60Ever2DerogPubRec": {
+        "MaxDelqEver": {
             "mutable": false,
-            "description": "Historical count of bad trades. User cannot erase this.",
-            "type": "discrete"
-        },
-        "NumTrades90Ever2DerogPubRec": {
-            "mutable": false,
-            "type": "discrete"
-        },
-        "MSinceOldestTradeOpen": {
-            "mutable": true,
-            "name": "MSinceOldestTradeOpen",
-            "type": "continuous",
-            "min": 0.0, "max": 500.0,
-            "step_size": 1.0,
-            "direction": "increase_only"
+            "description": "Historical max delinquency.",
+            "type": "categorical",
+            "domain": [
+                "Never Delinquent",
+                "30 Days Delinquent",
+                "60 Days Delinquent",
+                "90 Days Delinquent",
+                "120+ Days Delinquent",
+                "Derogatory Comment"
+            ]
         }
     },
     "student": {
