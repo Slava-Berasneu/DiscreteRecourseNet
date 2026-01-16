@@ -1,42 +1,32 @@
 {
     "adult": {
-        "workclass_group": {
-            "type": 5,
-            "description": "Choice",
-            "features": ["workclass"]
-        },
-        "occupation_group": {
-            "type": 5,
-            "description": "Choice",
-            "features": ["occupation"]
-        }
     },
     "home": {
-        "inquiry_logic": {
+        "Stop_New_Credit_Applications": {
             "type": 2,
-            "description": "Composition (Subset). Excl7Days is a subset of Last6M.",
+            "description": "Composition (Subset). Stopping new applications reduces recent inquiry counts.",
             "master": "NumInqLast6M",
             "derived": ["NumInqLast6Mexcl7days"],
             "rule": "clip_to_master"
         },
-        "trade_accounting": {
+        "Build_Satisfactory_Credit_History": {
             "type": 2,
-            "description": "Composition (Sum). Increasing satisfactory trades increases total trades.",
+            "description": "Composition (Sum). Accumulating more satisfactory trades increases total trade count.",
             "master": "NumSatisfactoryTrades",
             "derived": ["NumTotalTrades"],
             "rule": "add_delta"
         },
-        "utilization_behavior": {
+        "Pay_Down_Revolving_Debt": {
             "type": 4,
-            "description": "Latent Behavior. High utilization fraction correlates with count of maxed-out trades.",
+            "description": "Latent Behavior. Paying down balances reduces utilization and high-utilization trade counts.",
             "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
             "strategy": "weighted_proportional"
         }
     },
     "student": {
-        "digital_engagement": {
+        "Increase_Online_Participation": {
             "type": 4,
-            "description": "Latent Behavior. All click counts represent 'Engagement'.",
+            "description": "Latent Behavior. Actively participating in the course increases interaction counts for forums, content, and homepage.",
             "features": [
                 "forumng_click",
                 "homepage_click",
@@ -49,18 +39,18 @@
         }
     },
     "credit_card": {
-        "bill_smoothing": {
+        "Reduce_Spending_Habits": {
             "type": 3,
-            "description": "Momentum. Bill amounts are sequential.",
+            "description": "Momentum. Reducing spending habits lowers bill amounts sequentially over time.",
             "features": [
                 "BILL_AMT1", "BILL_AMT2", "BILL_AMT3",
                 "BILL_AMT4", "BILL_AMT5", "BILL_AMT6"
             ],
             "strategy": "decay_weighting"
         },
-        "payment_smoothing": {
+        "Improve_Payment_Consistency": {
             "type": 3,
-            "description": "Momentum. Payment history implies a trajectory.",
+            "description": "Momentum. Consistently paying on time improves the trajectory of payment status history.",
             "features": [
                 "PAY_0", "PAY_2", "PAY_3",
                 "PAY_4", "PAY_5", "PAY_6"
