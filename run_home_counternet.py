@@ -1,6 +1,9 @@
 from pathlib import Path
 import argparse
 import sys
+import torch
+torch.set_num_threads(1)
+torch.set_num_interop_threads(1)
 
 from counternet.dataset import load_configs
 from counternet.model import CounterNetModel, BaselinePredictiveModel
@@ -15,6 +18,11 @@ from counternet.pipeline import (
 from counternet.cf_explainer import VanillaCF
 from pytorch_lightning import seed_everything
 from typing import Optional, List
+
+def resolve_ablation_tag(m_config: dict, ablation: Optional[str]) -> str:
+    if ablation:
+        return ablation
+    return m_config.get("ablation_tag") or "default"
 
 def resolve_dataset_config_paths(
     dataset_config: Path,
@@ -66,7 +74,7 @@ def apply_ablation_to_config(m_config: dict, ablation: Optional[str]) -> dict:
     m_config["ablation_tag"] = ablation
     return m_config
 
-def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int) -> Path:
+def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int, ablation_tag: str = "default") -> Path:
     """
     Searches for a model checkpoint and returns the path
     Prefers the best checkpoint
@@ -84,7 +92,7 @@ def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int
             raise FileNotFoundError(f"{ckpt_path} does not exist")
 
     dataset_name = m_config["dataset_name"]
-    run_dir = results_root / dataset_name / f"seed-{seed}"
+    run_dir = results_root / ablation_tag / dataset_name / f"seed-{seed}"
 
     # Prefer the best.ckpt if it exists
     best_alias = run_dir / "best.ckpt"
@@ -107,20 +115,22 @@ def train_full_experiment(m_config_path: Path, t_config_path: Path,
     t_config = load_configs(t_config_path)
 
     m_config = apply_ablation_to_config(m_config, ablation)
+    ablation_tag = resolve_ablation_tag(m_config, ablation)
 
     print(
         f"[TRAIN] Running Experiment on dataset='{m_config['dataset_name']}', "
-        f"seed={seed}, ablation={ablation}"
+        f"seed={seed}, ablation={ablation_tag}"
     )
     experiment = Experiment(
         explainers=[CounterNetModel, VanillaCF],
         m_configs=[m_config],
         t_configs=t_config,
         debug=debug,
+        results_root=results_root
     )
     experiment.run(seeds=[seed])
 
-    run_dir = results_root / m_config["dataset_name"] / f"seed-{seed}"
+    run_dir = results_root / ablation_tag / m_config["dataset_name"] / f"seed-{seed}"
     run_dir.mkdir(parents=True, exist_ok=True)
     ckpts = sorted(run_dir.glob("*.ckpt"))
     if ckpts:
@@ -146,6 +156,7 @@ def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
     t_config = load_configs(t_config_path)
 
     m_config = apply_ablation_to_config(m_config, ablation)
+    ablation_tag = resolve_ablation_tag(m_config, ablation)
     dataset_name = m_config["dataset_name"]
 
     # 1) Train a baseline predictive model for VanillaCF
@@ -155,14 +166,14 @@ def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
     pred_trainer.fit()
 
     # 2) Load CounterNet from checkpoint
-    ckpt_path = find_checkpoint(ckpt_arg, m_config, results_root, seed)
+    ckpt_path = find_checkpoint(ckpt_arg, m_config, results_root, seed, ablation_tag)
     print(f"[EVAL] Loading CounterNet checkpoint from: {ckpt_path}")
     cfnet_model = CounterNetModel(m_config)
     cfnet_model.prepare_data()
     cfnet_model = load_trained_model(cfnet_model, checkpoint_path=str(ckpt_path), gpus=0)
 
     # 3) Set up output dir and evaluator
-    run_dir = results_root / dataset_name / f"seed-{seed}"
+    run_dir = results_root / ablation_tag / dataset_name / f"seed-{seed}"
     run_dir.mkdir(parents=True, exist_ok=True)
     evaluator = Evaluator(configs={"is_logging": True})
 
@@ -259,7 +270,7 @@ def parse_args(argv=None):
         type=str,
         default=None,
         help="Path to a CounterNet .ckpt file OR a directory containing .ckpt files. "
-             "If omitted, will look under assets/results/<dataset>/seed-<SEED>/.",
+             "If omitted, will look under assets/results/<ablation-tag>/<dataset>/seed-<SEED>/.",
     )
     parser.add_argument(
         "--debug",
@@ -292,7 +303,7 @@ def main(argv=None):
         raise ValueError(
             "--ckpt is only supported when running a single dataset."
             "For multiple datasets, omit --ckpt and let the script pick per-dataset checkpoints"
-            "from --results-root/<dataset>/seed-<seed>/, or run with --retrain."
+            "from --results-root/<ablation-tag>/<dataset>/seed-<seed>/, or run with --retrain."
         )
 
     for m_config_path in dataset_config_paths:

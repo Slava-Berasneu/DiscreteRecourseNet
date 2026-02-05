@@ -143,13 +143,36 @@ class CategoricalNormalizer(object):
         self.categories = categories
         self.cat_idx = cat_idx
 
-    def normalize(self, x, hard=False):
-        cat_idx = self.cat_idx
-        for col in self.categories:
-            cat_end_idx = cat_idx + len(col)
+        # Build slices for each one-hot group inside the full feature vector x
+        self.cat_slices = []
+        start = cat_idx
+        for cat in categories:
+            end = start + len(cat)
+            self.cat_slices.append((start, end))
+            start = end
+
+    def normalize(self, x, hard: bool = False):
+        parts = []
+        start = 0
+
+        for cat_idx, cat_end_idx in self.cat_slices:
+            if start < cat_idx:
+                parts.append(x[:, start:cat_idx])
+
+            logits = x[:, cat_idx:cat_end_idx]
+            probs = torch.softmax(logits, dim=-1)
+
             if hard:
-                x[:, cat_idx: cat_end_idx] = F.gumbel_softmax(x[:, cat_idx: cat_end_idx].clone().detach(), hard=hard)
-            else:
-                x[:, cat_idx: cat_end_idx] = F.softmax(x[:, cat_idx: cat_end_idx].clone().detach(), dim=-1)
-            cat_idx = cat_end_idx
-        return x
+                idx = probs.argmax(dim=-1)
+                onehot = torch.nn.functional.one_hot(
+                    idx, num_classes=probs.shape[-1]
+                ).to(probs.dtype)
+                probs = probs + (onehot - probs).detach()
+
+            parts.append(probs)
+            start = cat_end_idx
+
+        if start < x.shape[1]:
+            parts.append(x[:, start:])
+
+        return torch.cat(parts, dim=1)

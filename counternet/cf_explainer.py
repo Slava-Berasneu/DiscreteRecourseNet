@@ -59,18 +59,26 @@ class VanillaCF(LocalExplainerBase):
         return 1.0 * l_1 + 0.5 * l_2
 
     def generate_cf(self, x: torch.Tensor):
-        self.cf = nn.Parameter(x.clone(), requires_grad=True)
-        optim = self.configure_optimizers()
-        for i in range(self.steps):
-            c = self()
-            l_1, l_2 = self._loss_functions(x, c)
-            loss = self._loss_compute(l_1, l_2)
+        cf = nn.Parameter(x.clone(), requires_grad=True)
+        optim = torch.optim.RMSprop([cf], lr=0.001)
+
+        for _ in range(self.steps):
+            c = cf if self.cat_normalizer is None else self.cat_normalizer.normalize(cf)
+            y_pred = self.pred_fn(x)
+            y_prime = flip_binary(y_pred)
+            c_y = self.pred_fn(c)
+
+            l_1 = F.binary_cross_entropy(c_y, y_prime)
+            l_2 = F.mse_loss(x, c)
+            loss = 1.0 * l_1 + 0.5 * l_2
+
             optim.zero_grad()
             loss.backward()
             optim.step()
 
-        cf = self.cf.clone().detach() * 1.0
-        return cf if self.cat_normalizer is None else self.cat_normalizer.normalize(cf, hard=True)
+        out = cf.detach().clone()
+        return out if self.cat_normalizer is None else self.cat_normalizer.normalize(out, hard=True)
+
 
 # Cell
 class DiverseCF(LocalExplainerBase):

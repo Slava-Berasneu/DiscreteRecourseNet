@@ -305,7 +305,7 @@ class LocalCFGenerator(CFGeneratorBase):
 
         if self.is_parallel and not debug:
             print(f"generating {size} cfs in parallel...")
-            result = Parallel(n_jobs=-1, max_nbytes=None, verbose=False)(
+            result = Parallel(n_jobs=12, max_nbytes=None, verbose=False, backend="threading")(
                 delayed(self.gen_step) (x=x)
                 for ix, (x, y) in enumerate(tqdm(dataset)) if ix < size
             )
@@ -551,8 +551,14 @@ class Evaluator(object):
 
 # Cell
 class Experiment(object):
-    def __init__(self, explainers: List[ExplainerBase],
-            m_configs: List[Dict[str, Any]], t_configs: Optional[Dict[str, Any]] = None, debug: bool = False):
+    def __init__(
+            self,
+            explainers: List[ExplainerBase],
+            m_configs: List[Dict[str, Any]],
+            t_configs: Optional[Dict[str, Any]] = None,
+            debug: bool = False,
+            results_root: Path = Path("assets/results")
+    ):
         self.explainers = explainers
         self.m_configs = m_configs
         self.use_pred_model = False # need a `BaselinePredictiveModel` or not
@@ -563,6 +569,7 @@ class Experiment(object):
             self.t_configs = t_configs
         self.__check_explainers()
         self.debug = debug
+        self.results_root = Path(results_root)
 
         self.evaluator = Evaluator(configs={'is_logging': True})
 
@@ -596,8 +603,12 @@ class Experiment(object):
         print(f"[INFO] No seed provided; defaulting to {default_seed}")
         return [default_seed]
 
-    def __make_dir(self, dataset_name: str, seed: int):
-        dir_path = Path(f'assets/results/{dataset_name}/seed-{seed}/')
+    def __make_dir(self, dataset_name: str, seed: int, m_config: Optional[Dict[str, Any]] = None):
+        ablation_tag = "default"
+        if m_config is not None:
+            ablation_tag = m_config.get("ablation_tag", "default")
+
+        dir_path = self.results_root / ablation_tag / dataset_name / f"seed-{seed}"
         dir_path.mkdir(parents=True, exist_ok=True)
         return dir_path
 
@@ -660,7 +671,7 @@ class Experiment(object):
 
         dataset_name = m_config['dataset_name']
         # logging dir
-        dir_path = self.__make_dir(dataset_name, seed)
+        dir_path = self.__make_dir(dataset_name, seed, m_config)
 
         for explainer in self.explainers:
             self.explainer_step(explainer, pred_model, m_config, dir_path)
