@@ -1,0 +1,75 @@
+{
+    "adult": {
+        "increase_only": [],
+        "decrease_only": []
+    },
+    "home": {
+        "increase_only": [
+            "PercentTradesNeverDelq",
+            "MSinceMostRecentDelq",
+            "MSinceMostRecentInqexcl7days",
+            "NumSatisfactoryTrades",
+            "NumTotalTrades",
+            "NumTradesOpeninLast12M",
+            "NumTrades60Ever2DerogPubRec",
+            "NumTrades90Ever2DerogPubRec"
+        ],
+        "decrease_only": [
+            "NumInqLast6M",
+            "NumInqLast6Mexcl7days",
+            "NetFractionRevolvingBurden",
+            "NetFractionInstallBurden",
+            "NumRevolvingTradesWBalance",
+            "NumInstallTradesWBalance",
+            "NumBank2NatlTradesWHighUtilization",
+            "PercentTradesWBalance"
+        ]
+    },
+    "student": {
+        "increase_only": [
+            "weighted_score",
+            "studied_credits",
+            "forumng_click",
+            "homepage_click",
+            "oucontent_click",
+            "resource_click",
+            "subpage_click",
+            "url_click",
+            "dataplus_click",
+            "glossary_click",
+            "oucollaborate_click",
+            "quiz_click",
+            "ouelluminate_click",
+            "sharedsubpage_click",
+            "questionnaire_click",
+            "page_click",
+            "externalquiz_click",
+            "ouwiki_click",
+            "dualpane_click",
+            "folder_click",
+            "repeatactivity_click",
+            "htmlactivity_click",
+            "highest_education"
+        ],
+        "decrease_only": []
+    },
+    "credit_card": {
+        "increase_only": [
+            "LIMIT_BAL",
+            "PAY_AMT1",
+            "PAY_AMT2",
+            "PAY_AMT3",
+            "PAY_AMT4",
+            "PAY_AMT5",
+            "PAY_AMT6"
+        ],
+        "decrease_only": [
+            "PAY_0",
+            "PAY_2",
+            "PAY_3",
+            "PAY_4",
+            "PAY_5",
+            "PAY_6"
+        ]
+    }
+}

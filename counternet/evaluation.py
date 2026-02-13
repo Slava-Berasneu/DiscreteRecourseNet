@@ -4,7 +4,6 @@ __all__ = ['SensitivityMetric', 'proximity', 'ProximityMetric']
 from .import_essentials import *
 from .utils import *
 
-# Comes from 02b_counter_net.ipynb, cell
 class SensitivityMetric(Metric):
     def __init__(self, predict_fn: Callable, scaler: ABCScaler, cat_idx: int, threshold: float):
         super().__init__(dist_sync_on_step=False)

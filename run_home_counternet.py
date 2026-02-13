@@ -6,7 +6,7 @@ torch.set_num_threads(1)
 torch.set_num_interop_threads(1)
 
 from counternet.dataset import load_configs
-from counternet.model import CounterNetModel, BaselinePredictiveModel
+from counternet.model import CounterNetModel, BaselinePredictiveModel, DiscreteRecourseNetModel
 from counternet.pipeline import (
     Experiment,
     GlobalCFGenerator,
@@ -18,6 +18,31 @@ from counternet.pipeline import (
 from counternet.cf_explainer import VanillaCF
 from pytorch_lightning import seed_everything
 from typing import Optional, List
+
+# Choose which CF generators to run.
+# Example: run DiscreteRecourseNet + CounterNet
+# MODELS_TO_RUN = ["discrete_recoursenet", "counternet"]
+
+MODELS_TO_RUN: List[str] = [
+    "discrete_recoursenet",
+    "counternet"
+]
+
+MODEL_REGISTRY = {
+    "counternet": CounterNetModel,
+    "discrete_recoursenet": DiscreteRecourseNetModel,
+    "vanillacf": VanillaCF,
+}
+
+
+def resolve_explainers(models_to_run: List[str]) -> List[type]:
+    explainers = []
+    for name in models_to_run:
+        if name not in MODEL_REGISTRY:
+            raise ValueError(f"Unknown model '{name}'. Options: {sorted(MODEL_REGISTRY.keys())}")
+        cls = MODEL_REGISTRY[name]
+        explainers.append(cls)
+    return explainers
 
 def resolve_ablation_tag(m_config: dict, ablation: Optional[str]) -> str:
     if ablation:
@@ -74,38 +99,40 @@ def apply_ablation_to_config(m_config: dict, ablation: Optional[str]) -> dict:
     m_config["ablation_tag"] = ablation
     return m_config
 
-def find_checkpoint(ckpt_arg: str, m_config: dict, results_root: Path, seed: int, ablation_tag: str = "default") -> Path:
-    """
-    Searches for a model checkpoint and returns the path
-    Prefers the best checkpoint
-    """
-    if ckpt_arg:
-        ckpt_path = Path(ckpt_arg)
-        if ckpt_path.is_file():
-            return ckpt_path
-        elif ckpt_path.is_dir():
-            candidates = sorted(ckpt_path.glob("*.ckpt"))
-            if not candidates:
-                raise FileNotFoundError(f"No .ckpt files found in {ckpt_path}")
-            return candidates[-1]
-        else:
-            raise FileNotFoundError(f"{ckpt_path} does not exist")
+def resolve_run_dir(
+    run_dir_arg: Optional[str],
+    *,
+    m_config: dict,
+    results_root: Path,
+    seed: int,
+    ablation_tag: str = "default",
+) -> Path:
+    """<results_root>/<ablation_tag>/<dataset_name>/seed-<seed>/"""
+    if run_dir_arg:
+        p = Path(run_dir_arg)
+        if not p.exists():
+            raise FileNotFoundError(f"Run directory does not exist: {p}")
+        if not p.is_dir():
+            raise ValueError(
+                f"--ckpt must point to a *run directory* (not a file). Got: {p}"
+            )
+        return p
 
     dataset_name = m_config["dataset_name"]
-    run_dir = results_root / ablation_tag / dataset_name / f"seed-{seed}"
+    return results_root / ablation_tag / dataset_name / f"seed-{seed}"
 
-    # Prefer the best.ckpt if it exists
-    best_alias = run_dir / "best.ckpt"
-    if best_alias.is_file():
-        return best_alias
 
-    candidates = sorted(run_dir.glob("*.ckpt"))
-    if not candidates:
+def find_checkpoint_in_run_dir(run_dir: Path, *, model_name: str) -> Path:
+    """Find a model checkpoint inside a run directory."""
+
+    checkpoint = run_dir / f"best_{model_name}.ckpt"
+    if checkpoint.is_file():
+        return checkpoint
+    else:
         raise FileNotFoundError(
-            f"No .ckpt files found in default results dir: {run_dir}\n"
-            f"Try running with --retrain first, or pass --ckpt explicitly."
+            f"best_{model_name}.ckpt checkpoint file not found"
+            f"Try running with --retrain first."
         )
-    return candidates[-1]
 
 def train_full_experiment(m_config_path: Path, t_config_path: Path,
                           results_root: Path, seed: int, debug: bool,
@@ -121,8 +148,9 @@ def train_full_experiment(m_config_path: Path, t_config_path: Path,
         f"[TRAIN] Running Experiment on dataset='{m_config['dataset_name']}', "
         f"seed={seed}, ablation={ablation_tag}"
     )
+    selected = resolve_explainers(MODELS_TO_RUN)
     experiment = Experiment(
-        explainers=[CounterNetModel, VanillaCF],
+        explainers=selected,
         m_configs=[m_config],
         t_configs=t_config,
         debug=debug,
@@ -143,12 +171,10 @@ def train_full_experiment(m_config_path: Path, t_config_path: Path,
 
 def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
                          results_root: Path, seed: int,
-                         ckpt_arg: str, debug: bool,
+                         run_dir_arg: Optional[str], debug: bool,
                          ablation: Optional[str]) -> None:
-    """
-    Load CounterNet checkpoint and re-run:
-      - global CFs (CounterNet as global explainer)
-      - local CFs (VanillaCF on baseline predictive model)
+    """Evaluate a previously trained run.
+    Regenerate CFs + compute metrics for listed models
     """
     seed_everything(seed, workers=True)
 
@@ -159,52 +185,65 @@ def eval_from_checkpoint(m_config_path: Path, t_config_path: Path,
     ablation_tag = resolve_ablation_tag(m_config, ablation)
     dataset_name = m_config["dataset_name"]
 
-    # 1) Train a baseline predictive model for VanillaCF
-    print(f"[EVAL] Training baseline predictive model for local explanations...")
-    pred_model = BaselinePredictiveModel(m_config)
-    pred_trainer = ModelTrainer(pred_model, t_config, logger_name="pred_model")
-    pred_trainer.fit()
+    selected = resolve_explainers(MODELS_TO_RUN)
 
-    # 2) Load CounterNet from checkpoint
-    ckpt_path = find_checkpoint(ckpt_arg, m_config, results_root, seed, ablation_tag)
-    print(f"[EVAL] Loading CounterNet checkpoint from: {ckpt_path}")
-    cfnet_model = CounterNetModel(m_config)
-    cfnet_model.prepare_data()
-    cfnet_model = load_trained_model(cfnet_model, checkpoint_path=str(ckpt_path), gpus=0)
+    # Train a baseline predictive model if we need VanillaCF
+    pred_model = None
+    if "vanillacf" in MODELS_TO_RUN:
+        print(f"[EVAL] Training baseline predictive model for local explanations...")
+        pred_model = BaselinePredictiveModel(m_config)
+        pred_trainer = ModelTrainer(pred_model, t_config, logger_name="pred_model")
+        pred_trainer.fit()
 
-    # 3) Set up output dir and evaluator
-    run_dir = results_root / ablation_tag / dataset_name / f"seed-{seed}"
+    # Resolve run directory and evaluator
+    run_dir = resolve_run_dir(
+        run_dir_arg,
+        m_config=m_config,
+        results_root=results_root,
+        seed=seed,
+        ablation_tag=ablation_tag,
+    )
     run_dir.mkdir(parents=True, exist_ok=True)
     evaluator = Evaluator(configs={"is_logging": True})
 
-    # 4) Global CFs with CounterNet
-    print("[EVAL] Generating global counterfactuals with CounterNet...")
-    global_cf_gen = GlobalCFGenerator(
-        cfnet_model,
-        configs = m_config,
-        ref_model = pred_model,
-    )
-    global_results = global_cf_gen.generate(debug=debug)
-    evaluator.eval(global_results, run_dir)
-    print("[EVAL] Global CF metrics updated in metrics.csv")
+    # Evaluate each selected model
+    for explainer_cls in selected:
+        name = explainer_cls.__name__
 
-    # 5) Local CFs with VanillaCF + baseline predictive model
-    print("[EVAL] Generating local counterfactuals with VanillaCF...")
-    local_cfg = dict(m_config)
-    local_cfg.pop("cf_target_filter", None)
+        if explainer_cls is VanillaCF:
+            if pred_model is None:
+                raise RuntimeError("VanillaCF requested but baseline predictive model was not created.")
+            print("[EVAL] Generating local counterfactuals with VanillaCF...")
+            local_cfg = dict(m_config)
+            local_cfg.pop("cf_target_filter", None)
+            local_cfg['lr'] = 0.05
+            local_cfg['max_iter'] = 1000
 
-    local_cfg['lr'] = 0.05
-    local_cfg['max_iter'] = 1000
+            local_cf_gen = LocalCFGenerator(
+                VanillaCF(pred_model.predict),
+                pred_model,
+                configs=local_cfg,
+                ref_model=pred_model,
+            )
+            local_results = local_cf_gen.generate(debug=debug)
+            evaluator.eval(local_results, run_dir)
+            continue
 
-    local_cf_gen = LocalCFGenerator(
-        VanillaCF(pred_model.predict),
-        pred_model,
-        configs = local_cfg,
-        ref_model = pred_model,
-    )
-    local_results = local_cf_gen.generate(debug=debug)
-    evaluator.eval(local_results, run_dir)
-    print("[EVAL] Local CF metrics updated in metrics.csv")
+        # Global CF model: load its checkpoint and generate CFs
+        ckpt_path = find_checkpoint_in_run_dir(run_dir, model_name=name)
+        print(f"[EVAL] Loading {name} checkpoint from: {ckpt_path}")
+        global_model = explainer_cls(m_config)
+        global_model.prepare_data()
+        global_model = load_trained_model(global_model, checkpoint_path=str(ckpt_path), gpus=0)
+
+        print(f"[EVAL] Generating global counterfactuals with {name}...")
+        global_cf_gen = GlobalCFGenerator(
+            global_model,
+            configs=m_config,
+            ref_model=pred_model if pred_model is not None else global_model,
+        )
+        global_results = global_cf_gen.generate(debug=debug)
+        evaluator.eval(global_results, run_dir)
 
     print(f"[DONE] Evaluation finished. See {run_dir / 'metrics.csv'}")
 
@@ -269,8 +308,10 @@ def parse_args(argv=None):
         "--ckpt",
         type=str,
         default=None,
-        help="Path to a CounterNet .ckpt file OR a directory containing .ckpt files. "
-             "If omitted, will look under assets/results/<ablation-tag>/<dataset>/seed-<SEED>/.",
+        help=(
+            "Path to a *run directory* containing checkpoints (e.g. assets/results/<ablation-tag>/<dataset>/seed-<SEED>/). "
+            "If omitted, the script uses that default convention under --results-root."
+        ),
     )
     parser.add_argument(
         "--debug",
@@ -322,7 +363,7 @@ def main(argv=None):
                 t_config_path=args.trainer_config,
                 results_root=args.results_root,
                 seed=args.seed,
-                ckpt_arg=args.ckpt,
+                run_dir_arg=args.ckpt,
                 debug=args.debug,
                 ablation=args.ablation,
             )

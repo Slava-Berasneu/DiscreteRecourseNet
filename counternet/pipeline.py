@@ -1,7 +1,6 @@
 __all__ = ['pl_logger', 'load_trained_model', 'coord_sparsity_and_manifold', 'ModelTrainer', 'CFGeneratorBase',
            'LocalCFGenerator', 'is_predictive_model', 'GlobalCFGenerator', 'Evaluator', 'Experiment']
 
-# Cell
 from .import_essentials import *
 from .utils import *
 from .training_module import BaseModule, CFNetTrainingModule
@@ -9,12 +8,14 @@ from .model import BaselinePredictiveModel, CounterNetModel
 from .base_interface import LocalExplainerBase, GlobalExplainerBase, ExplainerBase
 from .cf_explainer import VanillaCF
 from .evaluation import SensitivityMetric, proximity
+from .recourse_constraints import add_actionability_to_results
 from sklearn.neighbors import NearestNeighbors
+import json
+import math
 
 logging.getLogger('pytorch_lightning').setLevel(logging.ERROR)
 pl_logger = logging.getLogger("pytorch_lightning.core")
 
-# Cell
 def load_trained_model(module: BaseModule, checkpoint_path: str, gpus: int = 0) -> BaseModule:
     """
     Load weights from a Lightning checkpoint into a constructed module.
@@ -64,14 +65,14 @@ def coord_sparsity_and_manifold(pred_model: BaseModule,
     x_clamped = x.clamp(0.0, 1.0)
     cf_clamped = cf.clamp(0.0, 1.0)
 
-    # ---- Sparsity ----
+    # Sparsity
     delta = (cf_clamped - x_clamped).abs()
     changed_mask = delta > eps
     changed_per_sample = changed_mask.sum(dim=1)
     d = x_clamped.size(-1)
     sparsity = 1.0 - (changed_per_sample / float(d)).mean().item()
 
-    # ---- Reference training set ----
+    # Reference training set
     ref = ref_model if ref_model is not None else pred_model
     train_x, train_y = ref.train_dataset[:]
     train_x_clamped = train_x.clamp(0.0, 1.0)
@@ -143,7 +144,131 @@ def _to_feature_space(pred_model: BaseModule, X: torch.Tensor) -> torch.Tensor:
     return torch.cat(feat_parts, dim=1) # (n_samples, C + D)
 
 
-# Cell
+def _json_dumps(obj: Any) -> str:
+    """Compact JSON for CSV cells"""
+    def _default(o):
+        try:
+            if isinstance(o, (np.integer, np.int64, np.int32)):
+                return int(o)
+            if isinstance(o, (np.floating, np.float64, np.float32)):
+                return float(o)
+        except Exception:
+            pass
+        return str(o)
+    return json.dumps(obj, ensure_ascii=False, default=_default)
+
+
+def _decode_batch_to_feature_dicts(pred_model: BaseModule, X: torch.Tensor) -> List[Dict[str, Any]]:
+    """Decode latent coordinate tensor into per-sample raw values"""
+    cat_idx = pred_model.cat_normalizer.cat_idx
+    cont_cols = list(getattr(pred_model, 'continous_cols', []))
+    disc_cols = list(getattr(pred_model, 'discret_cols', []))
+
+    X_cont_raw = pred_model.scaler.inverse_transform(X[:, :cat_idx])
+    out: List[Dict[str, Any]] = []
+
+    # categorical decoding
+    cat_slices = getattr(pred_model.cat_normalizer, 'cat_slices', [])
+    categories = getattr(pred_model.cat_normalizer, 'categories', [])
+
+    for i in range(X.size(0)):
+        d: Dict[str, Any] = {}
+        # continuous
+        for j, name in enumerate(cont_cols):
+            v = float(X_cont_raw[i, j].item())
+            if math.isnan(v):
+                d[name] = None
+            else:
+                d[name] = v
+        # categorical
+        if categories:
+            for k, name in enumerate(disc_cols):
+                (s, e) = cat_slices[k]
+                block = X[i, s:e]
+                idx = int(block.argmax().item())
+                cats = categories[k]
+                try:
+                    d[name] = cats[idx]
+                except Exception:
+                    d[name] = None
+        out.append(d)
+    return out
+
+
+def _add_recourse_examples_to_results(
+    *,
+    results: Dict[str, Any],
+    pred_model: BaseModule,
+    configs: Dict[str, Any],
+    x: torch.Tensor,
+    cf: torch.Tensor,
+    y_hat: Optional[torch.Tensor] = None,
+    cf_y_hat: Optional[torch.Tensor] = None,
+) -> None:
+    """
+    Attach a small sample of recourse suggestions to results.
+    """
+    try:
+        n = int(x.size(0))
+    except Exception:
+        return
+    if n <= 0:
+        return
+
+    n_examples = int(configs.get('recourse_examples_n', 10))
+    seed = int(configs.get('recourse_examples_seed', 0))
+    eps = float(configs.get('recourse_examples_eps', 1e-6))
+
+    n_examples = max(0, min(n_examples, n))
+    if n_examples == 0:
+        results['recourse_examples'] = []
+        return
+
+    rng = np.random.default_rng(seed)
+    idxs = rng.choice(n, size=n_examples, replace=False)
+    idxs = [int(i) for i in idxs]
+
+    x_dicts = _decode_batch_to_feature_dicts(pred_model, x[idxs])
+    cf_dicts = _decode_batch_to_feature_dicts(pred_model, cf[idxs])
+
+    examples: List[Dict[str, Any]] = []
+    for row, i in enumerate(idxs):
+        xd = x_dicts[row]
+        cd = cf_dicts[row]
+        changes = []
+        for k in xd.keys():
+            xv = xd.get(k, None)
+            cv = cd.get(k, None)
+            if xv is None and cv is None:
+                continue
+            if isinstance(xv, (int, float)) and isinstance(cv, (int, float)):
+                if (not math.isnan(float(xv))) and (not math.isnan(float(cv))) and abs(float(cv) - float(xv)) > eps:
+                    changes.append({'feature': k, 'from': float(xv), 'to': float(cv)})
+            else:
+                if xv != cv:
+                    changes.append({'feature': k, 'from': xv, 'to': cv})
+
+        ex = {
+            'index': int(i),
+            'x': xd,
+            'cf': cd,
+            'changes': changes,
+        }
+        if y_hat is not None:
+            try:
+                ex['y_hat'] = int(y_hat[i].item())
+            except Exception:
+                pass
+        if cf_y_hat is not None:
+            try:
+                ex['cf_y_hat'] = int(cf_y_hat[i].item())
+            except Exception:
+                pass
+        examples.append(ex)
+
+    results['recourse_examples'] = examples
+
+
 class ModelTrainer(object):
     def __init__(self,
                  model: BaseModule,
@@ -203,8 +328,8 @@ class ModelTrainer(object):
         dest_path = dir_path / best_model_path.name
         shutil.copy(best_model_path, dest_path)
 
-        # create an alias 'best.ckpt'
-        alias_path = dir_path / "best.ckpt"
+        # create a per-model checkpoint
+        alias_path = dir_path / f"best_{self.model.__class__.__name__}.ckpt"
         shutil.copy(dest_path, alias_path)
 
         return dest_path
@@ -214,7 +339,7 @@ class ModelTrainer(object):
             self.model, checkpoint_path=checkpoint_path, gpus=gpus)
         return self.model
 
-# Cell
+
 class CFGeneratorBase(ABC):
     results = {
         "x": None,
@@ -246,10 +371,15 @@ class CFGeneratorBase(ABC):
         self.dataset = pred_model.test_dataset
         self.sensitivity = pred_model.sensitivity
 
+        try:
+            self.results.update({'cat_idx': int(pred_model.cat_normalizer.cat_idx)})
+        except Exception:
+            self.results.update({'cat_idx': None})
+
     def generate(self, dataset: Optional[TensorDataset]=None, test_size: Optional[int] = None, debug: bool = False):
         raise NotImplementedError
 
-# Cell
+
 class LocalCFGenerator(CFGeneratorBase):
     def __init__(self, cf_algo: LocalExplainerBase,
         pred_model: BaselinePredictiveModel,
@@ -360,14 +490,33 @@ class LocalCFGenerator(CFGeneratorBase):
             'manifold_dist': man_dist,
         })
 
+        # Actionability (constraints from action_groups.json)
+        add_actionability_to_results(
+            results=self.results,
+            pred_model=self.pred_model,
+            configs=self.configs,
+            x=x,
+            cf=cf,
+            y_hat=y_hat,
+        )
+
+        _add_recourse_examples_to_results(
+            results=self.results,
+            pred_model=self.pred_model,
+            configs=self.configs,
+            x=x,
+            cf=cf,
+            y_hat=y_hat,
+            cf_y_hat=cf_y_hat,
+        )
+
         return self.results
 
-# Cell
-# a temp workaround
+
 def is_predictive_model(model: BaseModule):
     return callable(getattr(model, "predict", None))
 
-# Cell
+
 class GlobalCFGenerator(CFGeneratorBase):
     def __init__(self, cf_algo: GlobalExplainerBase,
             pred_model: Optional[BaselinePredictiveModel] = None, configs: Dict[str, Any] = {},
@@ -444,6 +593,26 @@ class GlobalCFGenerator(CFGeneratorBase):
             'manifold_dist': man_dist,
         })
 
+        # Actionability (constraints from action_groups.json)
+        add_actionability_to_results(
+            results=self.results,
+            pred_model=self.pred_model,
+            configs=self.configs,
+            x=x,
+            cf=cf,
+            y_hat=y_hat,
+        )
+
+        _add_recourse_examples_to_results(
+            results=self.results,
+            pred_model=self.pred_model,
+            configs=self.configs,
+            x=x,
+            cf=cf,
+            y_hat=y_hat,
+            cf_y_hat=cf_y_hat,
+        )
+
         return self.results
 
 # Cell
@@ -467,7 +636,13 @@ class Evaluator(object):
             'sparsity',
             'manifold_dist',
             'validity_recourse', # fraction of y_hat==0 that reach class 1
-            'stability_pos', # fraction of y_hat==1 that stay class 1
+            # actionability
+            'actionability_rate',
+            'monotonicity_violation_rate',
+            'immutability_violation_rate',
+            'avg_num_actionability_violations',
+            'avg_num_actionability_changes',
+            'valid_change_rate',
             #'validity_goal_pos',  # y_hat==0 reach 1, y_hat==1 stay 1
         ]
         # ['diffs', 'total_num']
@@ -528,13 +703,16 @@ class Evaluator(object):
         else:
             r['validity_recourse'][cf_name] = float('nan')
 
-        # do CFs stay in the positive class for predicted positives
-        pos_mask = (y_hat == 1)
-        if pos_mask.any():
-            target_pos = torch.ones_like(cf_y_hat[pos_mask])
-            r['stability_pos'][cf_name] = accuracy(target_pos.int(), cf_y_hat[pos_mask].int()).item()
-        else:
-            r['stability_pos'][cf_name] = float('nan')
+        # Actionability metrics
+        for k in (
+            'actionability_rate',
+            'monotonicity_violation_rate',
+            'immutability_violation_rate',
+            'avg_num_actionability_violations',
+            'avg_num_actionability_changes',
+            'valid_change_rate',
+        ):
+            r[k][cf_name] = float(results.get(k, float('nan')))
 
         #target_all_pos = torch.ones_like(cf_y_hat)
         #r['validity_goal_pos'][cf_name] = accuracy(target_all_pos.int(), cf_y_hat.int()).item()
@@ -544,10 +722,50 @@ class Evaluator(object):
         if self.is_logging:
             final_result_df.to_csv(csv_path)
             torch.save(results, dir_path / f"{cf_name}_results.pt")
+
+            # Recourse examples (same examples as handled by different models)
+            try:
+                examples = results.get('recourse_examples', None)
+                if isinstance(examples, list) and len(examples) > 0:
+                    ex_path = dir_path / "recourse_examples.csv"
+                    write_header = not ex_path.exists()
+                    import csv as _csv
+                    with open(ex_path, "a", newline="", encoding="utf-8") as f:
+                        w = _csv.writer(f)
+                        if write_header:
+                            w.writerow(["model", "index", "y_hat", "cf_y_hat", "changes_json", "x_json", "cf_json"])
+                        for ex in examples:
+                            w.writerow([
+                                cf_name,
+                                ex.get("index", None),
+                                ex.get("y_hat", None),
+                                ex.get("cf_y_hat", None),
+                                _json_dumps(ex.get("changes", [])),
+                                _json_dumps(ex.get("x", {})),
+                                _json_dumps(ex.get("cf", {})),
+                            ])
+            except Exception as e:
+                print(f"[WARN] Could not write recourse examples for {cf_name}: {e}")
+
+            # Per-group breakdown
+            gbd = results.get('actionability_group_breakdown', None)
+            if isinstance(gbd, dict) and len(gbd) > 0:
+                try:
+                    gdf = pd.DataFrame.from_dict(gbd, orient='index')
+                    sort_cols = [c for c in [
+                        'monotonicity_violation_rate',
+                        'immutability_violation_rate',
+                        'change_rate',
+                    ] if c in gdf.columns]
+                    if sort_cols:
+                        gdf = gdf.sort_values(by=sort_cols, ascending=False)
+                    gdf.to_csv(dir_path / f"{cf_name}_actionability_groups.csv")
+                except Exception as e:
+                    print(f"[WARN] Could not write group breakdown CSV for {cf_name}: {e}")
             print("Results have been saved!")
         return final_result_df
 
-# Cell
+
 class Experiment(object):
     def __init__(
             self,
@@ -617,7 +835,7 @@ class Experiment(object):
         else:
             CFExplainer = explainer
         if issubclass(CFExplainer, GlobalExplainerBase):
-            if issubclass(CFExplainer, CounterNetModel):
+            if issubclass(CFExplainer, CFNetTrainingModule):
                 model = CFExplainer(m_config)
             else:
                 model = CFExplainer(m_config, pred_model)
