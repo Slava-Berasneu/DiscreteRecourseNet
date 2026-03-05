@@ -43,12 +43,9 @@ class SensitivityMetric(Metric):
             return torch.tensor(1.0, device=self.diffs.device)
         return 1 - self.diffs / self.total_n_changes
 
-
-# Comes from 02b_counter_net.ipynb, cell
 def proximity(x:torch.Tensor, c: torch.Tensor):
     return torch.abs(x - c).sum(dim=-1).mean()
 
-# Comes from 02b_counter_net.ipynb, cell
 class ProximityMetric(Metric):
     def __init__(self):
         super().__init__(dist_sync_on_step=False)

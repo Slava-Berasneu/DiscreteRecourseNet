@@ -1,12 +1,12 @@
 __all__ = ['BaseModule', 'PredictiveTrainingModule', 'CFNetTrainingModule']
 
-# Cell
+
 from .import_essentials import *
 from .utils import *
-from .evaluation import SensitivityMetric, proximity# ProximityMetric
+from .evaluation import SensitivityMetric, proximity
 from .base_interface import ABCBaseModule, GlobalExplainerBase
 
-# Cell
+
 class BaseModule(pl.LightningModule, ABCBaseModule):
     def __init__(self, configs: Dict[str, Any]):
         super().__init__()
@@ -101,7 +101,7 @@ class BaseModule(pl.LightningModule, ABCBaseModule):
         return DataLoader(self.test_dataset, batch_size=self.batch_size,
                           pin_memory=True, shuffle=False, num_workers=0)
 
-# Cell
+
 class PredictiveTrainingModule(BaseModule):
     def __init__(self, configs: Dict[str, Any]):
         super().__init__(configs)
@@ -144,7 +144,7 @@ class PredictiveTrainingModule(BaseModule):
         self.log('val/val_loss', loss, on_step=False, on_epoch=True, prog_bar=False, logger=True)
         self.log('val/pred_accuracy', self.val_acc(y_hat, y.int()), on_step=False, on_epoch=True, sync_dist=True)
 
-# Cell
+
 class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
     def __init__(self, configs: Dict[str, Any]):
         super().__init__(configs)
@@ -153,8 +153,59 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         self.cf_acc = Accuracy()
         # self.proximity = ProximityMetric()
 
-        # "all" (default) | "neg_only" (only y==0 used to train generator)
+        # "all" or "neg_only" (only y==0 used to train generator)
         self.cf_target_filter = configs.get("cf_target_filter", "all")
+
+        # L2 printouts:
+        self.l2_ema_beta = float(configs.get("l2_ema_beta", 0.9))
+        self._l2_ema_epoch = -1
+        self._l2_ema_ratio = None
+        self._l2_ema_l2 = None
+        self._l2_ema_l3 = None
+
+    def _ensure_l2_ema_epoch(self):
+        ep = int(self.current_epoch)
+        if getattr(self, "_l2_ema_epoch", -1) != ep:
+            self._l2_ema_epoch = ep
+            self._l2_ema_ratio = None
+            self._l2_ema_l2 = None
+            self._l2_ema_l3 = None
+
+    def _update_l2_tuning_ema(self, l_2: torch.Tensor, l_3: torch.Tensor):
+        if self.trainer is not None and not getattr(self.trainer, "is_global_zero", True):
+            return
+        self._ensure_l2_ema_epoch()
+        with torch.no_grad():
+            eps = 1e-8
+            l2 = float(l_2.detach().item())
+            l3 = float(l_3.detach().item())
+            ratio = (float(self.lambda_2) * l2) / (float(self.lambda_3) * l3 + eps)
+
+            beta = float(getattr(self, "l2_ema_beta", 0.9))
+
+            def ema(prev, val):
+                return val if prev is None else (beta * prev + (1.0 - beta) * val)
+
+            self._l2_ema_ratio = ema(self._l2_ema_ratio, ratio)
+            self._l2_ema_l2 = ema(self._l2_ema_l2, l2)
+            self._l2_ema_l3 = ema(self._l2_ema_l3, l3)
+
+    def training_epoch_end(self, outs):
+        # hyperparams logging
+        super().training_epoch_end(outs)
+
+        if self.trainer is not None and not getattr(self.trainer, "is_global_zero", True):
+            return
+        if getattr(self, "_l2_ema_ratio", None) is None:
+            return
+
+        ratio = float(self._l2_ema_ratio)
+
+        self.print(
+            f"[l2-tune][epoch] epoch={int(self.current_epoch)} "
+            f"ema_l2={float(self._l2_ema_l2):.4f} ema_l3={float(self._l2_ema_l3):.4f} "
+            f"ema_ratio=(λ2·l2)/(λ3·l3)={ratio:.3f}"
+        )
 
     def forward(self, x, hard: bool=False):
         """hard: categorical features in counterfactual is one-hot-encoding or not"""
@@ -186,17 +237,35 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         y_hat: predicted result
         y_prime_mode: 'label' or 'predicted'
         """
-        # flip zero/one
-        if y_prime == None:
+        if y_prime is None:
             y_prime = flip_binary(y_hat)
 
-        c_y, _ = self(c)
-        # loss functions
+        # Predict label for c
+        if hasattr(self, "predict_proba") and callable(getattr(self, "predict_proba")):
+            c_y = self.predict_proba(c)
+        else:
+            c_y, _ = self.model_forward(c)
+
         if self.smooth_y and not is_val:
             y = smooth_y(y)
             y_prime = smooth_y(y_prime)
+
         l_1 = self.loss_func_1(y_hat, y)
-        l_2 = self.loss_func_2(x, c)
+
+        # Proximity term:
+        action_cost = getattr(self, "_action_cost_override", None)
+        if action_cost is None and not is_val:
+            action_cost = getattr(self, "_last_action_cost", None)
+
+        if (not is_val) and isinstance(action_cost, torch.Tensor) and action_cost.ndim == 1 and action_cost.shape[0] == x.shape[0]:
+            l_2 = action_cost.mean()
+        else:
+            prox_cf = getattr(self, '_prox_override', None)
+            if (not is_val) and isinstance(prox_cf, torch.Tensor) and prox_cf.shape == c.shape:
+                l_2 = self.loss_func_2(x, prox_cf)
+            else:
+                l_2 = self.loss_func_2(x, c)
+
         l_3 = self.loss_func_3(c_y, y_prime)
 
         return l_1, l_2, l_3
@@ -220,17 +289,47 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         x, y = batch
         y_hat, c = self(x)
 
-        # --------- Ablations over CF-generator training targets ---------
-        # Modes:
-        #   - "all": optimize generator on all samples
-        #   - "neg_only": optimize generator only on negatives (y==0)
-        #   - "validity_neg_only": optimize proximity on all samples, but only apply the label-flip validity loss on negatives
+        # Soft CF for proximity loss:  used for L2
+        prox_c = getattr(self, '_last_c_soft', None)
+        if (not isinstance(prox_c, torch.Tensor)) or (prox_c.shape != c.shape):
+            prox_c = None
+
+        # Optional action-cost vector (DiscreteRecourseNet); shape [B].
+        action_cost = getattr(self, "_last_action_cost", None)
+        if (not isinstance(action_cost, torch.Tensor)) or (action_cost.ndim != 1) or (action_cost.shape[0] != x.shape[0]):
+            action_cost = None
+
+        def call_loss(x_, c_, y_, y_hat_, **kwargs):
+            prox_override = kwargs.pop('_prox_override', None)
+            if prox_override is None:
+                prox_override = prox_c
+
+            action_cost_override = kwargs.pop("_action_cost_override", None)
+            if action_cost_override is None:
+                action_cost_override = action_cost
+
+            if prox_override is not None:
+                self._prox_override = prox_override
+            if action_cost_override is not None:
+                self._action_cost_override = action_cost_override
+            try:
+                return self._loss_functions(x_, c_, y_, y_hat_, **kwargs)
+            finally:
+                if hasattr(self, '_prox_override'):
+                    delattr(self, '_prox_override')
+                if hasattr(self, '_action_cost_override'):
+                    delattr(self, '_action_cost_override')
+
+        # Ablation modes for CF targets:
+        # "all": optimize generator on all samples
+        # "neg_only": optimize generator only on negatives (y==0)
+        # "validity_neg_only": optimize proximity on all samples, but only apply the label-flip validity loss on negatives
         filter_mode = getattr(self, "cf_target_filter", "all")
         if filter_mode in ("neg_only", "validity_neg_only"):
             neg_mask = (y == 0)
 
             # loss on full batch
-            l_1_all, l_2_all, l_3_all = self._loss_functions(x, c, y, y_hat)
+            l_1_all, l_2_all, l_3_all = call_loss(x, c, y, y_hat)
 
             # negative-only losses
             if neg_mask.any():
@@ -238,7 +337,11 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
                 c_neg = c[neg_mask]
                 y_neg = y[neg_mask]
                 y_hat_neg = y_hat[neg_mask]
-                _, l_2_neg, l_3_neg = self._loss_functions(x_neg, c_neg, y_neg, y_hat_neg)
+                _, l_2_neg, l_3_neg = call_loss(
+                    x_neg, c_neg, y_neg, y_hat_neg,
+                    _prox_override=(prox_c[neg_mask] if prox_c is not None else None),
+                    _action_cost_override=(action_cost[neg_mask] if action_cost is not None else None),
+                )
             else:
                 device = y_hat.device
                 l_2_neg = torch.tensor(0.0, device=device)
@@ -246,41 +349,44 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
 
             if optimizer_idx == 0:
                 result = self.predictor_step(l_1_all, l_3_all)
-
-            if optimizer_idx == 1:
+            else:
                 if filter_mode == "neg_only":
                     # generator sees only negatives for both proximity and validity
                     result = self.explainer_step(l_2_neg, l_3_neg)
+                    self._update_l2_tuning_ema(l_2_neg, l_3_neg)
                 else:
                     # generator sees all samples for proximity, but only negatives for validity
                     result = self.explainer_step(l_2_all, l_3_neg)
+                    self._update_l2_tuning_ema(l_2_all, l_3_neg)
 
             self._logging_loss(l_1_all, l_2_all, l_3_all, stage='train', on_step=False)
             return result
 
         if filter_mode == "flip_neg_stay_pos":
-            l_1_all, l_2_all, _ = self._loss_functions(x, c, y, y_hat)
+            l_1_all, l_2_all, _ = call_loss(x, c, y, y_hat)
 
             # recourse target: always positive
             y_prime = torch.ones_like(y_hat)
 
-            _, _, l_3 = self._loss_functions(x, c, y, y_hat, y_prime=y_prime)
+            _, _, l_3 = call_loss(x, c, y, y_hat, y_prime=y_prime)
 
             if optimizer_idx == 0:
                 result = self.predictor_step(l_1_all, l_3)
             else:
                 result = self.explainer_step(l_2_all, l_3)
+                self._update_l2_tuning_ema(l_2_all, l_3)
 
             self._logging_loss(l_1_all, l_2_all, l_3, stage="train", on_step=False)
             return result
 
-        # --------- Default ---------
-        l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat)
+        # Default
+        l_1, l_2, l_3 = call_loss(x, c, y, y_hat)
 
         if optimizer_idx == 0:
             result = self.predictor_step(l_1, l_3)
         else:
             result = self.explainer_step(l_2, l_3)
+            self._update_l2_tuning_ema(l_2, l_3)
 
         self._logging_loss(l_1, l_2, l_3, stage='train', on_step=False)
         return result
@@ -290,7 +396,12 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
 
         # fwd
         y_hat, c = self(x, hard=True)
-        c_y, _ = self(c)
+
+        # label for c
+        if hasattr(self, "predict_proba") and callable(getattr(self, "predict_proba")):
+            c_y = self.predict_proba(c)
+        else:
+            c_y, _ = self.model_forward(c)
 
         filter_mode = getattr(self, "cf_target_filter", "all")
 

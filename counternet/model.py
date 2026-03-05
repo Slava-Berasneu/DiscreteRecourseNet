@@ -84,13 +84,29 @@ class CounterNetModel(CFNetTrainingModule):
         c = self.explainer(x)
         return torch.squeeze(y_hat, -1), c
 
+    def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
+        """Predictor-only forward (no CF generation)."""
+        z = self.encoder_model(x)
+        pred = self.predictor(z)
+        y_hat = torch.sigmoid(self.pred_linear(pred))
+        return torch.squeeze(y_hat, -1)
+
+    def configure_optimizers(self):
+        # Separate optimizers to avoid explainer loss affecting predictor weights.
+        pred_params = list(self.encoder_model.parameters()) + list(self.predictor.parameters()) + list(self.pred_linear.parameters())
+        exp_params = list(self.explainer.parameters())
+        opt_1 = torch.optim.Adam(pred_params, lr=self.lr)
+        opt_2 = torch.optim.Adam(exp_params, lr=self.lr)
+        return (opt_1, opt_2)
+
 
 class DiscreteRecourseNetModel(CFNetTrainingModule):
-    """two-stage discrete counterfactual generator
+    """DiscreteRecourseNet: a two-stage discrete counterfactual generator.
 
-    - Type 0 action groups
-    - Gumbel-Softmax straight-through sampling (mask + choice networks)
-    - Invalid action masking for monotonicity (increase-only / decrease-only)
+    Currently implemented:
+      - Type 0 (singleton) action groups
+      - Gumbel-Softmax straight-through sampling (mask + choice)
+      - Invalid action masking for monotonicity (increase-only / decrease-only)
 
     Expected action_groups.json schema:
       action_groups[dataset][group_id] = {
@@ -113,21 +129,21 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         super().__init__(config)
         assert self.enc_dims[-1] == self.dec_dims[0]
 
-        # networks: encoder + predictor
+        # encoder + predictor networks
         self.encoder_model = MultilayerPerception(self.enc_dims)
         self.predictor = MultilayerPerception(self.dec_dims)
         self.pred_linear = nn.Linear(self.dec_dims[-1], 1)
 
         # discrete policy hyperparams
-        self.gumbel_tau_mask: float = float(config.get("gumbel_tau_mask", 1.0))
-        self.gumbel_tau_choice: float = float(config.get("gumbel_tau_choice", 1.0))
+        self.gumbel_tau_mask: float = float(config.get("gumbel_tau_mask"))
+        self.gumbel_tau_choice: float = float(config.get("gumbel_tau_choice"))
         self.mask_threshold: float = float(config.get("mask_threshold", 0.5))
-        self.invalid_logit_value: float = float(config.get("invalid_logit_value", -1e9))
+        self.invalid_logit_value: float = float(config.get("invalid_logit_value", -1e4))
         self._eps: float = float(config.get("mask_eps", 1e-6))
 
-        # load groups from action_groups.json
+        # load type-0 groups from action_groups.json (raw domains)
         self.dataset_name: str = str(config.get("dataset_name", ""))
-        self.action_groups_path: Path = Path(config.get("action_groups_path", "assets/actions/action_groups.json"))
+        self.action_groups_path: Path = Path("assets/actions/action_groups.json")
 
         self._group_specs: List[Dict[str, Any]] = []
         self._inc_only: set[str] = set()
@@ -142,7 +158,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 "Run generate_action_groups.py to produce a full action_groups.json with Type 0 singleton groups."
             )
 
-        # action space over groups
+        # concatenated logits for the action space over groups
         self._action_sizes: List[int] = [int(g["action_size"]) for g in self._group_specs]
         self._action_offsets: List[Tuple[int, int]] = []
         offset = 0
@@ -154,12 +170,23 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         z_dim = self.enc_dims[-1]
         # 2-class per group (apply vs not apply)
         self.mask_head = nn.Linear(z_dim, self.num_groups * 2)
-        # logits for each group's action domain
+        # logits for each group's action domain, concatenated
         self.choice_head = nn.Linear(z_dim, self.total_actions)
 
+        # Built after prepare_data: scaled domains + feature slices
         self._domains_built: bool = False
         self._sanity_logged: bool = False
 
+        # Soft (expected) counterfactual used for proximity loss during training
+        self._last_c_soft: Optional[torch.Tensor] = None
+
+        # Expected (differentiable) action cost for training-time proximity.
+        self.action_cost_base: float = float(config.get('action_cost_base'))
+        self.action_cost_weights: Dict[str, float] = dict(config.get('action_cost_weights', {}) or {})
+        self._last_action_cost: Optional[torch.Tensor] = None
+
+
+    # Action group parsing/build
     def _parse_action_groups(self) -> None:
         if not self.action_groups_path.exists():
             raise FileNotFoundError(f"action_groups.json not found at: {self.action_groups_path}")
@@ -198,7 +225,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             kind = str(ad.get("kind", "values"))
             vals = ad.get("values", []) if kind == "values" else []
 
-            # ignore immutable and noop groups for the learnable action policy
+            # ignore immutable/noop groups for the learnable action policy
             if (not mutable) or kind == "noop":
                 continue
             if kind != "values":
@@ -214,15 +241,29 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                     "action_size": len(vals),
                     "increase_only": feat in self._inc_only,
                     "decrease_only": feat in self._dec_only,
+                    "special_values": g.get("special_values") or [],
                 }
             )
+
+    def _default_cost_weight(self, gid: str, feat: str, kind: str, action_size: int) -> float:
+        # can be overridden by config
+        if gid in self.action_cost_weights:
+            return float(self.action_cost_weights[gid])
+        if feat in self.action_cost_weights:
+            return float(self.action_cost_weights[feat])
+
+        # normalize continuous domains by number of discrete steps
+        if kind == "continuous":
+            return 1.0 / max(1, int(action_size) - 1)
+        # categorical: normalize by number of categories
+        return 1.0 / max(1, int(action_size) - 1)
 
     def prepare_data(self):
         super().prepare_data()
         self._ensure_action_domains()
 
     def _ensure_action_domains(self) -> None:
-        """Build tensors in preprocessed input space.
+        """Build action-domain tensors in preprocessed input space.
 
         Continuous:
           - store (A,) scaled target values using fitted MinMaxScaler
@@ -250,11 +291,17 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 j = int(cont_pos[feat])
 
                 raw = torch.tensor([float(v) for v in vals], dtype=torch.float32)
+                # processing.MinMaxScaler with scalar tensor attributes `min_` and `max_` over all continuous values
                 denom = (self.scaler.max_ - self.scaler.min_)
                 if float(denom) == 0.0:
                     denom = torch.tensor(1.0, dtype=torch.float32)
                 dom = (raw - self.scaler.min_) / denom
                 self.register_buffer(f"_ag_dom_{gi}", dom)
+                
+                self.register_buffer(f"_ag_idx_{gi}", torch.arange(int(g["action_size"]), dtype=torch.float32))
+                w = self._default_cost_weight(g["id"], feat, "continuous", int(g["action_size"]))
+                raw_vals = [float(v) for v in vals]
+                step = float(raw_vals[1] - raw_vals[0]) if len(raw_vals) > 1 else 1.0
                 self._group_meta.append(
                     {
                         "id": g["id"],
@@ -264,6 +311,10 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                         "action_size": int(g["action_size"]),
                         "increase_only": bool(g.get("increase_only", False)),
                         "decrease_only": bool(g.get("decrease_only", False)),
+                        "cost_weight": w,
+                        "raw_v0": float(raw_vals[0]),
+                        "raw_step": step,
+                        "special_values": [float(v) for v in (g.get("special_values") or [])],
                     }
                 )
 
@@ -280,6 +331,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                     if v in cat_to_index:
                         domain_cat_indices.append(int(cat_to_index[v]))
                     else:
+                        # numeric coercion (e.g. JSON int vs numpy.float64)
                         found = False
                         for c, j in cat_to_index.items():
                             try:
@@ -305,6 +357,8 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 self.register_buffer(f"_ag_posmap_{gi}", pos_map)
 
                 (s, e) = cat_slices[di]
+                self.register_buffer(f"_ag_idx_{gi}", torch.arange(int(g["action_size"]), dtype=torch.float32))
+                w = self._default_cost_weight(g["id"], feat, "categorical", int(g["action_size"]))
                 self._group_meta.append(
                     {
                         "id": g["id"],
@@ -315,6 +369,8 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                         "num_categories": int(m),
                         "increase_only": bool(g.get("increase_only", False)),
                         "decrease_only": bool(g.get("decrease_only", False)),
+                        "cost_weight": w,
+                        "special_values": [float(v) for v in (g.get("special_values") or [])],
                     }
                 )
             else:
@@ -322,7 +378,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                     f"Feature '{feat}' (group '{g['id']}') not found in continous_cols or discret_cols."
                 )
 
-        # Log loaded groups
+        # group composition printout (continuous vs categorical)
         if not self._sanity_logged:
             n_cont = sum(1 for mm in self._group_meta if mm.get("kind") == "continuous")
             n_cat = sum(1 for mm in self._group_meta if mm.get("kind") == "categorical")
@@ -340,12 +396,35 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         self._domains_built = True
 
     def forward(self, x, hard: bool = False):
+        """
+        CFNetTrainingModule.forward() applies CategoricalNormalizer.normalize() which treats the
+        categorical part of `c` as logits and applies softmax. DiscreteRecourseNet constructs
+        one-hot categorical blocks for Type-0 categorical actions, so we use `hard=True`
+        during training to avoid washing out categorical interventions.
+        """
         if self.training:
             hard = True
         return super().forward(x, hard=hard)
 
+
+    def predict_proba(self, x: torch.Tensor) -> torch.Tensor:
+        """Predictor-only forward."""
+        z = self.encoder_model(x)
+        pred = self.predictor(z)
+        y_hat = torch.sigmoid(self.pred_linear(pred))
+        return torch.squeeze(y_hat, -1)
+
+    def configure_optimizers(self):
+        # Separate optimizers: predictor vs discrete policy (mask+choice)
+        pred_params = list(self.encoder_model.parameters()) + list(self.predictor.parameters()) + list(self.pred_linear.parameters())
+        policy_params = list(self.mask_head.parameters()) + list(self.choice_head.parameters())
+        opt_1 = torch.optim.Adam(pred_params, lr=self.lr)
+        opt_2 = torch.optim.Adam(policy_params, lr=self.lr)
+        return (opt_1, opt_2)
+
+    # Forward (Type 0 actions)
     def _mask_invalid_actions(self, gi: int, x: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
-        """Instance-dependent invalid action masking"""
+        """Instance-dependent invalid action masking for Type 0 monotonicity."""
         meta = self._group_meta[gi]
         inc_only = bool(meta.get("increase_only", False))
         dec_only = bool(meta.get("decrease_only", False))
@@ -356,7 +435,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         device = logits.device
 
         if meta["kind"] == "continuous":
-            dom = getattr(self, f"_ag_dom_{gi}")
+            dom = getattr(self, f"_ag_dom_{gi}")  # (A,)
             cur = x[:, int(meta["cont_index"])]  # (B,)
 
             dom_min = dom.min()
@@ -395,7 +474,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         return logits.masked_fill(~feasible, self.invalid_logit_value)
 
     def model_forward(self, x):
-        """x is already preprocessed (scaled + one-hot)"""
+        """x is already preprocessed (scaled + one-hot)."""
         if not self._domains_built:
             self._ensure_action_domains()
 
@@ -407,15 +486,26 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         # mask network
         mask_logits = self.mask_head(z).view(B, self.num_groups, 2)
         if self.training:
-            mask_onehot = torch.nn.functional.gumbel_softmax(mask_logits, tau=self.gumbel_tau_mask, hard=True, dim=-1)
-            apply = mask_onehot[..., 1]  # (B, K)
+            # Hard mask for applying actions, with straight-through gradients
+            mask_onehot = torch.nn.functional.gumbel_softmax(
+                mask_logits, tau=self.gumbel_tau_mask, hard=True, dim=-1
+            )
+            apply = mask_onehot[..., 1]  # (B, K) {0,1} (ST)
+
+            # Soft mask for proximity loss
+            apply_soft = torch.softmax(mask_logits, dim=-1)[..., 1]  # (B, K)
         else:
             probs = torch.softmax(mask_logits, dim=-1)
             apply = (probs[..., 1] > self.mask_threshold).to(z.dtype)
+            apply_soft = apply
 
         # choice network
         choice_logits_all = self.choice_head(z)  # (B, sum A_k)
         c = x.clone()
+        c_soft = x.clone() if self.training else None
+
+        # Expected action cost (differentiable) for training-time proximity
+        total_cost = torch.zeros((B,), device=x.device) if self.training else None
 
         for gi, meta in enumerate(self._group_meta):
             a0, a1 = self._action_offsets[gi]
@@ -423,22 +513,71 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             logits = self._mask_invalid_actions(gi, x, logits)
 
             if self.training:
-                a_onehot = torch.nn.functional.gumbel_softmax(logits, tau=self.gumbel_tau_choice, hard=True, dim=-1)
+                a_onehot = torch.nn.functional.gumbel_softmax(
+                    logits, tau=self.gumbel_tau_choice, hard=True, dim=-1
+                )
+                a_soft = torch.softmax(logits, dim=-1)
             else:
                 idx = logits.argmax(dim=-1)
                 a_onehot = torch.nn.functional.one_hot(idx, num_classes=logits.shape[-1]).to(logits.dtype)
+                a_soft = None
 
             a_apply = apply[:, gi].unsqueeze(1)  # (B,1)
+            a_apply_soft = apply_soft[:, gi].unsqueeze(1) if self.training else None
 
+            # accumulate expected cost
+            if self.training and a_soft is not None and total_cost is not None:
+                w = float(meta.get("cost_weight", 1.0))
+                apply_p = apply_soft[:, gi]  # (B,)
+                if meta["kind"] == "continuous":
+                    # expected step distance from current value (sentinels treated as OOD)
+                    j_cur = int(meta["cont_index"])
+                    denom = (self.scaler.max_ - self.scaler.min_)
+                    raw_cur = x[:, j_cur] * denom + self.scaler.min_
+                    step = float(meta.get("raw_step", 1.0)) or 1.0
+                    v0 = float(meta.get("raw_v0", 0.0))
+                    idx_cur = torch.round((raw_cur - v0) / step)
+                    A = int(meta["action_size"])
+                    idx_cur = torch.clamp(idx_cur, 0.0, float(A - 1))
+                    # sentinel: virtual index -1 (adds +1 step to all valid moves)
+                    for sv in (meta.get("special_values") or []):
+                        sv_t = torch.tensor(float(sv), device=raw_cur.device, dtype=raw_cur.dtype)
+                        idx_cur = torch.where(raw_cur == sv_t, torch.full_like(idx_cur, -1.0), idx_cur)
+                    idx = getattr(self, f"_ag_idx_{gi}")  # (A,)
+                    mag = (a_soft * torch.abs(idx.unsqueeze(0) - idx_cur.unsqueeze(1))).sum(dim=1)
+                else:
+                    (s, e) = meta["slice"]
+                    cur_cat = x[:, s:e].argmax(dim=1)
+                    pos_map = getattr(self, f"_ag_posmap_{gi}")
+                    cur_pos = pos_map[cur_cat]
+                    p_cur = torch.zeros((B,), device=x.device, dtype=apply_p.dtype)
+                    known = cur_pos >= 0
+                    if known.any():
+                        p_cur[known] = a_soft[known, cur_pos[known]]
+                    mag = 1.0 - p_cur
+                total_cost = total_cost + (w * apply_p * (self.action_cost_base + mag))
             if meta["kind"] == "continuous":
                 dom = getattr(self, f"_ag_dom_{gi}")  # (A,)
                 target = a_onehot @ dom.unsqueeze(1)  # (B,1)
                 j = int(meta["cont_index"])
                 c[:, j : j + 1] = a_apply * target + (1.0 - a_apply) * x[:, j : j + 1]
+                if self.training and c_soft is not None and a_soft is not None:
+                    target_soft = a_soft @ dom.unsqueeze(1)  # (B,1)
+                    c_soft[:, j : j + 1] = a_apply_soft * target_soft + (1.0 - a_apply_soft) * x[:, j : j + 1]
             else:
                 dom_onehot = getattr(self, f"_ag_dom_{gi}")  # (A,m)
                 target_block = a_onehot @ dom_onehot  # (B,m)
                 (s, e) = meta["slice"]
                 c[:, s:e] = a_apply * target_block + (1.0 - a_apply) * x[:, s:e]
+                if self.training and c_soft is not None and a_soft is not None:
+                    target_block_soft = a_soft @ dom_onehot  # (B,m)
+                    c_soft[:, s:e] = a_apply_soft * target_block_soft + (1.0 - a_apply_soft) * x[:, s:e]
+
+        if self.training:
+            self._last_c_soft = c_soft
+            self._last_action_cost = total_cost
+        else:
+            self._last_c_soft = None
+            self._last_action_cost = None
 
         return torch.squeeze(y_hat, -1), c
