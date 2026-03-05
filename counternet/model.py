@@ -168,10 +168,12 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         self.total_actions: int = offset
 
         z_dim = self.enc_dims[-1]
+        p_dim = self.dec_dims[-1]
+        policy_input_dim = z_dim + p_dim # provide both encoder input z and predictor representation pred to the CF generator
         # 2-class per group (apply vs not apply)
-        self.mask_head = nn.Linear(z_dim, self.num_groups * 2)
+        self.mask_head = nn.Linear(policy_input_dim, self.num_groups * 2)
         # logits for each group's action domain, concatenated
-        self.choice_head = nn.Linear(z_dim, self.total_actions)
+        self.choice_head = nn.Linear(policy_input_dim, self.total_actions)
 
         # Built after prepare_data: scaled domains + feature slices
         self._domains_built: bool = False
@@ -482,9 +484,11 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         pred = self.predictor(z)
         y_hat = torch.sigmoid(self.pred_linear(pred))
 
+        policy_input = torch.cat((z, pred), dim=-1)  # z ⊕ p_x
+
         B = x.shape[0]
         # mask network
-        mask_logits = self.mask_head(z).view(B, self.num_groups, 2)
+        mask_logits = self.mask_head(policy_input).view(B, self.num_groups, 2)
         if self.training:
             # Hard mask for applying actions, with straight-through gradients
             mask_onehot = torch.nn.functional.gumbel_softmax(
@@ -500,7 +504,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             apply_soft = apply
 
         # choice network
-        choice_logits_all = self.choice_head(z)  # (B, sum A_k)
+        choice_logits_all = self.choice_head(policy_input)  # (B, sum A_k)
         c = x.clone()
         c_soft = x.clone() if self.training else None
 
