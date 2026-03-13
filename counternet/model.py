@@ -105,15 +105,18 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
     Currently implemented:
       - Type 0 (singleton) action groups
+      - Type 1/2 (base + derived) action groups
       - Gumbel-Softmax straight-through sampling (mask + choice)
       - Invalid action masking for monotonicity (increase-only / decrease-only)
 
     Expected action_groups.json schema:
       action_groups[dataset][group_id] = {
-        "type": 0,
-        "features": ["feature_name"],   # singleton
+        "type": 0|1|2,
+        "features": ["feature_name", ...],
         "mutable": true/false,
         "action_domain": {"kind": "values"|"noop", "feature": "...", "values": [...]},
+        "roles": {"base": [...], "derived": [...]},   # type 1/2 only
+        "rule": {"kind": "...", "params": {...}},      # type 1/2 only
       }
       action_groups[dataset]["__constraints__"]["monotonicity"] = {
         "increase_only": [...], "decrease_only": [...]
@@ -123,6 +126,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
       - Domains in action_groups.json are in feature space (raw values for continuous, category labels for discrete).
       - This model maps those domains into the preprocessed input space using the fitted MinMaxScaler and OneHotEncoder
         categories stored in CategoricalNormalizer.
+      - Type 1/2 groups act on the base feature only, derived features are updated using _apply_derived_constraints.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -154,8 +158,8 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         self.num_groups: int = len(self._group_specs)
         if self.num_groups == 0:
             raise ValueError(
-                f"No Type 0 mutable groups found for dataset='{self.dataset_name}' in {self.action_groups_path}. "
-                "Run generate_action_groups.py to produce a full action_groups.json with Type 0 singleton groups."
+                f"No mutable groups found for dataset='{self.dataset_name}' in {self.action_groups_path}. "
+                "Run generate_action_groups.py to produce a full action_groups.json."
             )
 
         # concatenated logits for the action space over groups
@@ -210,17 +214,47 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             g = ds[gid]
             if not isinstance(g, dict):
                 continue
-            if int(g.get("type", -1)) != 0:
-                continue  # only Type 0 for now
+
+            gtype = int(g.get("type", -1))
+            if gtype not in (0, 1, 2):
+                continue
 
             feats = g.get("features")
             if not feats:
                 ad = g.get("action_domain", {}) if isinstance(g.get("action_domain", {}), dict) else {}
                 if ad.get("feature") is not None:
                     feats = [ad.get("feature")]
-            if not feats or len(feats) != 1:
-                continue
-            feat = str(feats[0])
+
+            roles = g.get("roles", {}) if isinstance(g.get("roles", {}), dict) else {}
+            base_feats = list(roles.get("base", []))
+            derived_feats = list(roles.get("derived", []))
+            rule = g.get("rule", {}) if isinstance(g.get("rule", {}), dict) else {}
+
+            if gtype == 0:
+                # Type 0
+                if not feats or len(feats) != 1:
+                    continue
+                feat = str(feats[0])
+            elif gtype in (1, 2):
+                # Type 1/2: base features define the action domain, derived are updated by constraint
+                if not base_feats:
+                    raise ValueError(
+                        f"Type {gtype} group '{gid}' in dataset '{self.dataset_name}' "
+                        f"must define roles.base"
+                    )
+                if not derived_feats:
+                    raise ValueError(
+                        f"Type {gtype} group '{gid}' in dataset '{self.dataset_name}' "
+                        f"must define roles.derived"
+                    )
+                if len(base_feats) != 1:
+                    raise ValueError(
+                        f"Type {gtype} group '{gid}': only single-base groups are currently supported, "
+                        f"got base={base_feats}"
+                    )
+                feat = str(base_feats[0])
+                if not feats:
+                    feats = base_feats + derived_feats
 
             mutable = bool(g.get("mutable", True))
             ad = g.get("action_domain", {}) if isinstance(g.get("action_domain", {}), dict) else {}
@@ -238,12 +272,15 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             self._group_specs.append(
                 {
                     "id": gid,
+                    "type": gtype,
                     "feature": feat,
                     "action_values": vals,
                     "action_size": len(vals),
                     "increase_only": feat in self._inc_only,
                     "decrease_only": feat in self._dec_only,
                     "special_values": g.get("special_values") or [],
+                    "derived_features": derived_feats,
+                    "rule": rule,
                 }
             )
 
@@ -380,17 +417,53 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                     f"Feature '{feat}' (group '{g['id']}') not found in continous_cols or discret_cols."
                 )
 
+            # Resolve derived features for Type 1/2
+            derived_feats = g.get("derived_features", [])
+            rule = g.get("rule", {})
+            if derived_feats:
+                derived_indices: List[Dict[str, Any]] = []
+                for df in derived_feats:
+                    if df in cont_pos:
+                        derived_indices.append({
+                            "feature": df,
+                            "kind": "continuous",
+                            "cont_index": int(cont_pos[df]),
+                        })
+                    elif df in disc_pos:
+                        di = int(disc_pos[df])
+                        if di >= len(cat_slices):
+                            raise ValueError(
+                                f"Derived feature '{df}' missing category metadata."
+                            )
+                        (s, e) = cat_slices[di]
+                        derived_indices.append({
+                            "feature": df,
+                            "kind": "categorical",
+                            "slice": (int(s), int(e)),
+                        })
+                    else:
+                        raise ValueError(
+                            f"Derived feature '{df}' (group '{g['id']}') "
+                            f"not found in continous_cols or discret_cols."
+                        )
+                self._group_meta[-1]["derived"] = derived_indices
+                self._group_meta[-1]["rule"] = rule
+
         # group composition printout (continuous vs categorical)
         if not self._sanity_logged:
             n_cont = sum(1 for mm in self._group_meta if mm.get("kind") == "continuous")
             n_cat = sum(1 for mm in self._group_meta if mm.get("kind") == "categorical")
+            n_t0 = sum(1 for mm in self._group_meta if not mm.get("derived"))
+            n_t12 = sum(1 for mm in self._group_meta if mm.get("derived"))
             print(
-                f"[DiscreteRecourseNet] Loaded {len(self._group_meta)} Type-0 groups "
-                f"(continuous={n_cont}, categorical={n_cat}) for dataset='{self.dataset_name}'."
+                f"[DiscreteRecourseNet] Loaded {len(self._group_meta)} groups "
+                f"(type0={n_t0}, type1+2={n_t12}, "
+                f"continuous={n_cont}, categorical={n_cat}) "
+                f"for dataset='{self.dataset_name}'."
             )
             if n_cat == 0 and len(disc_cols) > 0:
                 print(
-                    "[DiscreteRecourseNet][WARN] No categorical Type-0 groups were loaded even though "
+                    "[DiscreteRecourseNet][WARN] No categorical groups were loaded even though "
                     "the dataset has discrete columns. Check action_groups.json domains / feature names."
                 )
             self._sanity_logged = True
@@ -474,6 +547,88 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             feasible[none_ok] = True
 
         return logits.masked_fill(~feasible, self.invalid_logit_value)
+
+    @staticmethod
+    def _constraint_fn(
+        kind: str,
+        params: Dict[str, Any],
+        x_base: torch.Tensor,
+        x_derived: torch.Tensor,
+        c_base: torch.Tensor,
+    ) -> torch.Tensor:
+        """Constraint function. All inputs/outputs are (B, 1)."""
+        if kind == "clip_derived_to_base":
+            return torch.min(x_derived, c_base)
+        elif kind == "derived_adds_base_delta":
+            delta = c_base - x_base
+            return x_derived + delta
+        else:
+            raise NotImplementedError(
+                f"Unknown constraint rule kind: '{kind}'. "
+                f"Implement it in _constraint_fn."
+            )
+
+    def _apply_derived_constraints(
+        self,
+        gi: int,
+        meta: Dict[str, Any],
+        x: torch.Tensor,
+        c: torch.Tensor,
+        c_soft: Optional[torch.Tensor],
+        a_apply: torch.Tensor,
+        a_apply_soft: Optional[torch.Tensor],
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """Apply constraint functions to derived features.
+
+        Called after the base feature has been written into c and c_soft
+        Updates derived features in c and c_soft in-place and
+        returns them.
+        """
+        derived_list = meta.get("derived")
+        rule = meta.get("rule", {})
+        if not derived_list or not rule:
+            return c, c_soft
+
+        kind = rule.get("kind", "")
+        params = rule.get("params", {})
+        base_meta_kind = meta["kind"]
+
+        for d_info in derived_list:
+            d_kind = d_info["kind"]
+
+            if d_kind == "continuous" and base_meta_kind == "continuous":
+                j_base = int(meta["cont_index"])
+                j_derived = int(d_info["cont_index"])
+
+                x_base = x[:, j_base : j_base + 1]
+                x_derived = x[:, j_derived : j_derived + 1]
+                c_base = c[:, j_base : j_base + 1]
+
+                new_derived = self._constraint_fn(
+                    kind, params, x_base, x_derived, c_base
+                )
+                c[:, j_derived : j_derived + 1] = (
+                    a_apply * new_derived + (1.0 - a_apply) * x_derived
+                )
+
+                if self.training and c_soft is not None and a_apply_soft is not None:
+                    c_soft_base = c_soft[:, j_base : j_base + 1]
+                    new_derived_soft = self._constraint_fn(
+                        kind, params, x_base, x_derived, c_soft_base
+                    )
+                    c_soft[:, j_derived : j_derived + 1] = (
+                        a_apply_soft * new_derived_soft
+                        + (1.0 - a_apply_soft) * x_derived
+                    )
+
+            else:
+                raise NotImplementedError(
+                    f"Derived constraint not implemented for "
+                    f"base kind={base_meta_kind}, derived kind={d_kind} "
+                    f"(group '{meta.get('id', '?')}', rule kind='{kind}')."
+                )
+
+        return c, c_soft
 
     def model_forward(self, x):
         """x is already preprocessed (scaled + one-hot)."""
@@ -576,6 +731,12 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 if self.training and c_soft is not None and a_soft is not None:
                     target_block_soft = a_soft @ dom_onehot  # (B,m)
                     c_soft[:, s:e] = a_apply_soft * target_block_soft + (1.0 - a_apply_soft) * x[:, s:e]
+
+            # Type 1/2: apply derived constraints
+            if meta.get("derived"):
+                c, c_soft = self._apply_derived_constraints(
+                    gi, meta, x, c, c_soft, a_apply, a_apply_soft
+                )
 
         if self.training:
             self._last_c_soft = c_soft
