@@ -3,7 +3,11 @@ import argparse
 import sys
 import itertools
 import shutil
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Union
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import torch
 
@@ -64,8 +68,8 @@ def resolve_dataset_config_paths(
     if datasets:
         resolved: List[Path] = []
         for name in datasets:
-            p_main = Path("assets/configs") / f"{name}.json"
-            p_extra = Path("assets/configs/extra") / f"{name}.json"
+            p_main = PROJECT_ROOT / "assets" / "configs" / f"{name}.json"
+            p_extra = PROJECT_ROOT / "assets" / "configs" / "extra" / f"{name}.json"
             resolved.append(p_main if p_main.exists() else p_extra if p_extra.exists() else p_main)
         return resolved
 
@@ -152,6 +156,24 @@ def _clean_run_dir(dir_path: Path, *, keep_ckpts: bool) -> None:
                 pass
 
 
+def _resolve_project_path(path_like: Union[str, Path]) -> Path:
+    path = Path(path_like)
+    if path.is_absolute():
+        return path
+    return PROJECT_ROOT / path
+
+
+def _absolutize_model_config_paths(m_config: Dict[str, Any]) -> Dict[str, Any]:
+    resolved = dict(m_config)
+    if "data_dir" in resolved and resolved["data_dir"] is not None:
+        resolved["data_dir"] = str(_resolve_project_path(resolved["data_dir"]))
+    resolved.setdefault(
+        "action_groups_path",
+        str(PROJECT_ROOT / "assets" / "actions" / "action_groups.json"),
+    )
+    return resolved
+
+
 def _run_experiment(*, m_config: Dict[str, Any], t_config: Dict[str, Any],
                     results_root: Path, seed: int, debug: bool) -> None:
     selected = resolve_explainers(MODELS_TO_RUN)
@@ -183,6 +205,7 @@ def train_full_experiment(
     m_config = apply_ablation_to_config(m_config, ablation)
     if overrides:
         m_config.update(overrides)
+    m_config = _absolutize_model_config_paths(m_config)
 
     ablation_tag = resolve_ablation_tag(m_config, ablation)
     if extra_tag:
@@ -225,6 +248,7 @@ def eval_from_checkpoint(
     t_config = load_configs(t_config_path)
 
     m_config = apply_ablation_to_config(m_config, ablation)
+    m_config = _absolutize_model_config_paths(m_config)
     ablation_tag = resolve_ablation_tag(m_config, ablation)
 
     selected = resolve_explainers(MODELS_TO_RUN)
@@ -329,7 +353,7 @@ def parse_args(argv=None):
     parser.add_argument(
         "--dataset-config",
         type=Path,
-        default=Path("assets/configs/home.json"),
+        default=PROJECT_ROOT / "assets" / "configs" / "home.json",
         help="Path to dataset/model config JSON (default: assets/configs/home.json)",
     )
     parser.add_argument(
@@ -353,13 +377,13 @@ def parse_args(argv=None):
     parser.add_argument(
         "--trainer-config",
         type=Path,
-        default=Path("assets/configs/trainer.json"),
+        default=PROJECT_ROOT / "assets" / "configs" / "trainer.json",
         help="Path to trainer config JSON (default: assets/configs/trainer.json)",
     )
     parser.add_argument(
         "--results-root",
         type=Path,
-        default=Path("assets/results"),
+        default=PROJECT_ROOT / "assets" / "results",
         help="Root directory for experiment outputs and copied checkpoints (default: assets/results)",
     )
     parser.add_argument("--seed", type=int, default=31, help="Random seed (default: 31)")
@@ -475,7 +499,7 @@ if __name__ == "__main__":
     main(sys.argv[1:])
 
     # Examples:
-    # python run_home_counternet.py --retrain --datasets adult credit_card home student
-    # python run_home_counternet.py --datasets adult credit_card home student
-    # python run_home_counternet.py --retrain --datasets adult credit_card home student --ablation cfgen_neg_only
-    # python run_home_counternet.py --grid --datasets home --grid_lambda2 0.001,0.01 --grid_action_cost_base 0.005,0.01
+    # python scripts/run_home_counternet.py --retrain --datasets adult credit_card home student
+    # python scripts/run_home_counternet.py --datasets adult credit_card home student
+    # python scripts/run_home_counternet.py --retrain --datasets adult credit_card home student --ablation cfgen_neg_only
+    # python scripts/run_home_counternet.py --grid --datasets home --grid_lambda2 0.001,0.01 --grid_action_cost_base 0.005,0.01

@@ -147,7 +147,8 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
         # load type-0 groups from action_groups.json (raw domains)
         self.dataset_name: str = str(config.get("dataset_name", ""))
-        self.action_groups_path: Path = Path("assets/actions/action_groups.json")
+        default_action_groups_path = Path(__file__).resolve().parents[1] / "assets" / "actions" / "action_groups.json"
+        self.action_groups_path = Path(config.get("action_groups_path", default_action_groups_path))
 
         self._group_specs: List[Dict[str, Any]] = []
         self._inc_only: set[str] = set()
@@ -159,7 +160,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         if self.num_groups == 0:
             raise ValueError(
                 f"No mutable groups found for dataset='{self.dataset_name}' in {self.action_groups_path}. "
-                "Run generate_action_groups.py to produce a full action_groups.json."
+                "Run scripts/generate_action_groups.py to produce a full action_groups.json."
             )
 
         # concatenated logits for the action space over groups

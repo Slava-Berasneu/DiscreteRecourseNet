@@ -3,14 +3,14 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 import json
-import os
 from pathlib import Path
 from sklearn.preprocessing import LabelEncoder
 
 # configuration
-CONFIG_DIR = Path("assets/configs")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PROJECT_ROOT / "assets" / "configs"
 ACTION_METADATA_PATH = CONFIG_DIR / "feature_metadata.json"
-OUTPUT_DIR = Path("assets/actions")
+OUTPUT_DIR = PROJECT_ROOT / "assets" / "actions"
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -35,7 +35,10 @@ def get_dataset_paths():
                 with open(file, 'r') as f:
                     config = json.load(f)
                 if 'dataset_name' in config and 'data_dir' in config:
-                    dataset_map[config['dataset_name']] = config['data_dir']
+                    data_path = Path(config['data_dir'])
+                    if not data_path.is_absolute():
+                        data_path = PROJECT_ROOT / data_path
+                    dataset_map[config['dataset_name']] = data_path
             except Exception:
                 pass
     return dataset_map

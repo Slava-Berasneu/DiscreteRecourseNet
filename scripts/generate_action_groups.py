@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
 Number = Union[int, float]
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Add/modify groups here. Anything not listed becomes Type 0
 '''
@@ -625,19 +626,19 @@ def main() -> None:
     p.add_argument(
         "--feature-metadata",
         type=str,
-        default="assets/actions/feature_metadata.json",
+        default=str(PROJECT_ROOT / "assets" / "actions" / "feature_metadata.json"),
         help="Path to feature_metadata.json",
     )
     p.add_argument(
         "--output",
         type=str,
-        default="assets/actions/action_groups.json",
+        default=str(PROJECT_ROOT / "assets" / "actions" / "action_groups.json"),
         help="Output path for action_groups.json",
     )
     p.add_argument(
         "--monotonicity",
         type=str,
-        default="assets/actions/monotonicity.json",
+        default=str(PROJECT_ROOT / "assets" / "actions" / "monotonicity.json"),
         help="Optional path to monotonicity.json (overrides defaults if exists).",
     )
     p.add_argument(

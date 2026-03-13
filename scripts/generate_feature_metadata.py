@@ -43,16 +43,17 @@ import argparse
 import json
 import math
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import numpy as np
 import pandas as pd
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATASET_PATHS = {
-    "adult": "assets/data/s_adult.csv",
-    "home": "assets/data/s_home.csv",
-    "student": "assets/data/s_student.csv",
-    "credit_card": "assets/data/extra/s_credit_cart.csv",
+    "adult": PROJECT_ROOT / "assets" / "data" / "s_adult.csv",
+    "home": PROJECT_ROOT / "assets" / "data" / "s_home.csv",
+    "student": PROJECT_ROOT / "assets" / "data" / "s_student.csv",
+    "credit_card": PROJECT_ROOT / "assets" / "data" / "extra" / "s_credit_cart.csv",
 }
 
 TARGET_COLS = {
@@ -316,15 +317,21 @@ def _infer_numeric_ordinal_domain(series_stats: pd.Series) -> List[Any]:
     return uniq_sorted.tolist()
 
 
-def _resolve_dataset_path(dataset_name: str, path_str: str, script_dir: Path) -> Path:
+def _resolve_dataset_path(dataset_name: str, path_str: Union[str, Path]) -> Path:
     p = Path(path_str)
     if p.exists():
         return p
 
+    if not p.is_absolute():
+        project_candidate = PROJECT_ROOT / p
+        if project_candidate.exists():
+            return project_candidate
+
+    data_dir = PROJECT_ROOT / "assets" / "data"
     if dataset_name == "credit_card":
-        candidates = [script_dir / "s_credit_cart.csv", script_dir / "s_credit_card.csv"]
+        candidates = [data_dir / "extra" / "s_credit_cart.csv", data_dir / "extra" / "s_credit_card.csv"]
     else:
-        candidates = [script_dir / f"s_{dataset_name}.csv"]
+        candidates = [data_dir / f"s_{dataset_name}.csv"]
     for c in candidates:
         if c.exists():
             return c
@@ -457,19 +464,27 @@ def get_feature_metadata(df: pd.DataFrame, dataset_name: str) -> Dict[str, Any]:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--output", type=str, default="assets/actions/feature_metadata.json", help="Output path")
-    p.add_argument("--monotonicity-out", type=str, default="assets/actions/monotonicity.json", help="Monotonicity sidecar output")
+    p.add_argument(
+        "--output",
+        type=str,
+        default=str(PROJECT_ROOT / "assets" / "actions" / "feature_metadata.json"),
+        help="Output path",
+    )
+    p.add_argument(
+        "--monotonicity-out",
+        type=str,
+        default=str(PROJECT_ROOT / "assets" / "actions" / "monotonicity.json"),
+        help="Monotonicity sidecar output",
+    )
     p.add_argument("--datasets", type=str, nargs="*", default=list(DEFAULT_DATASET_PATHS.keys()), help="Datasets to process")
     args = p.parse_args()
 
     out_path = Path(args.output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    script_dir = Path(__file__).resolve().parent
-
     full: Dict[str, Any] = {}
     for name in args.datasets:
-        path = _resolve_dataset_path(name, DEFAULT_DATASET_PATHS.get(name, ""), script_dir)
+        path = _resolve_dataset_path(name, DEFAULT_DATASET_PATHS.get(name, ""))
         if not path.exists():
             print(f"Warning: data file not found for {name} at {path}. Skipping.")
             continue
