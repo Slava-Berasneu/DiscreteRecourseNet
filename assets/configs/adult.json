@@ -19,6 +19,12 @@
         "race",
         "gender"
     ],
+    "immutable_columns": [
+        "age",
+        "marital_status",
+        "race",
+        "gender"
+    ],
     "encoder_dims": [
         29,
         50,

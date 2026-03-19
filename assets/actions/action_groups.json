@@ -8,8 +8,6 @@
     },
     "age": {
       "type": 0,
-      "name": "age",
-      "description": "Independent feature",
       "features": ["age"],
       "mutable": false,
       "action_domain": {
@@ -19,8 +17,6 @@
     },
     "hours_per_week": {
       "type": 0,
-      "name": "hours_per_week",
-      "description": "Independent feature",
       "features": ["hours_per_week"],
       "mutable": true,
       "action_domain": {
@@ -37,8 +33,6 @@
     },
     "workclass": {
       "type": 0,
-      "name": "workclass",
-      "description": "Independent feature",
       "features": ["workclass"],
       "mutable": true,
       "action_domain": {
@@ -49,8 +43,6 @@
     },
     "education": {
       "type": 0,
-      "name": "education",
-      "description": "Independent feature",
       "features": ["education"],
       "mutable": true,
       "action_domain": {
@@ -61,8 +53,6 @@
     },
     "marital_status": {
       "type": 0,
-      "name": "marital_status",
-      "description": "Independent feature",
       "features": ["marital_status"],
       "mutable": false,
       "action_domain": {
@@ -72,8 +62,6 @@
     },
     "occupation": {
       "type": 0,
-      "name": "occupation",
-      "description": "Independent feature",
       "features": ["occupation"],
       "mutable": true,
       "action_domain": {
@@ -84,8 +72,6 @@
     },
     "race": {
       "type": 0,
-      "name": "race",
-      "description": "Independent feature",
       "features": ["race"],
       "mutable": false,
       "action_domain": {
@@ -95,8 +81,6 @@
     },
     "gender": {
       "type": 0,
-      "name": "gender",
-      "description": "Independent feature",
       "features": ["gender"],
       "mutable": false,
       "action_domain": {
@@ -112,10 +96,91 @@
         "decrease_only": ["NetFractionInstallBurden", "NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization", "NumInqLast6M", "NumInqLast6Mexcl7days", "NumInstallTradesWBalance", "NumRevolvingTradesWBalance", "PercentTradesWBalance"]
       }
     },
+    "Stop_New_Credit_Applications": {
+      "type": 2,
+      "features": ["NumInqLast6M", "NumInqLast6Mexcl7days"],
+      "mutable": true,
+      "action_domain": {
+        "kind": "values",
+        "feature": "NumInqLast6M",
+        "values": [
+          0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+          20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0,
+          40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0,
+          60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0
+        ]
+      },
+      "special_values": {
+        "NumInqLast6M": [-9],
+        "NumInqLast6Mexcl7days": [-9]
+      },
+      "roles": {
+        "base": ["NumInqLast6M"],
+        "derived": ["NumInqLast6Mexcl7days"]
+      },
+      "rule": {
+        "kind": "clip_derived_to_base",
+        "params": {
+          "base": "NumInqLast6M"
+        }
+      }
+    },
+    "Build_Satisfactory_Credit_History": {
+      "type": 2,
+      "features": ["NumSatisfactoryTrades", "NumTotalTrades"],
+      "mutable": true,
+      "action_domain": {
+        "kind": "values",
+        "feature": "NumSatisfactoryTrades",
+        "values": [
+          0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
+          20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0,
+          40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0,
+          60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0, 76.0, 77.0, 78.0, 79.0
+        ]
+      },
+      "special_values": {
+        "NumSatisfactoryTrades": [-9],
+        "NumTotalTrades": [-9]
+      },
+      "roles": {
+        "base": ["NumSatisfactoryTrades"],
+        "derived": ["NumTotalTrades"]
+      },
+      "rule": {
+        "kind": "derived_adds_base_delta",
+        "params": {
+          "base": "NumSatisfactoryTrades",
+          "derived": "NumTotalTrades"
+        }
+      }
+    },
+    "Reduce_More_Severe_Delinquencies": {
+      "type": 2,
+      "features": ["NumTrades60Ever2DerogPubRec", "NumTrades90Ever2DerogPubRec"],
+      "mutable": true,
+      "action_domain": {
+        "kind": "values",
+        "feature": "NumTrades60Ever2DerogPubRec",
+        "values": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+      },
+      "special_values": {
+        "NumTrades60Ever2DerogPubRec": [-9],
+        "NumTrades90Ever2DerogPubRec": [-9]
+      },
+      "roles": {
+        "base": ["NumTrades60Ever2DerogPubRec"],
+        "derived": ["NumTrades90Ever2DerogPubRec"]
+      },
+      "rule": {
+        "kind": "clip_derived_to_base",
+        "params": {
+          "base": "NumTrades60Ever2DerogPubRec"
+        }
+      }
+    },
     "ExternalRiskEstimate": {
       "type": 0,
-      "name": "ExternalRiskEstimate",
-      "description": "Independent feature",
       "features": ["ExternalRiskEstimate"],
       "mutable": false,
       "action_domain": {
@@ -125,8 +190,6 @@
     },
     "MSinceOldestTradeOpen": {
       "type": 0,
-      "name": "MSinceOldestTradeOpen",
-      "description": "Independent feature",
       "features": ["MSinceOldestTradeOpen"],
       "mutable": false,
       "action_domain": {
@@ -136,8 +199,6 @@
     },
     "MSinceMostRecentTradeOpen": {
       "type": 0,
-      "name": "MSinceMostRecentTradeOpen",
-      "description": "Independent feature",
       "features": ["MSinceMostRecentTradeOpen"],
       "mutable": true,
       "action_domain": {
@@ -170,8 +231,6 @@
     },
     "AverageMInFile": {
       "type": 0,
-      "name": "AverageMInFile",
-      "description": "Independent feature",
       "features": ["AverageMInFile"],
       "mutable": true,
       "action_domain": {
@@ -189,54 +248,8 @@
       },
       "special_values": [-9]
     },
-    "NumSatisfactoryTrades": {
-      "type": 0,
-      "name": "NumSatisfactoryTrades",
-      "description": "Independent feature",
-      "features": ["NumSatisfactoryTrades"],
-      "mutable": true,
-      "action_domain": {
-        "kind": "values",
-        "feature": "NumSatisfactoryTrades",
-        "values": [
-          0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-          20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0,
-          40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0,
-          60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0, 76.0, 77.0, 78.0, 79.0
-        ]
-      },
-      "special_values": [-9]
-    },
-    "NumTrades60Ever2DerogPubRec": {
-      "type": 0,
-      "name": "NumTrades60Ever2DerogPubRec",
-      "description": "Independent feature",
-      "features": ["NumTrades60Ever2DerogPubRec"],
-      "mutable": true,
-      "action_domain": {
-        "kind": "values",
-        "feature": "NumTrades60Ever2DerogPubRec",
-        "values": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-      },
-      "special_values": [-9]
-    },
-    "NumTrades90Ever2DerogPubRec": {
-      "type": 0,
-      "name": "NumTrades90Ever2DerogPubRec",
-      "description": "Independent feature",
-      "features": ["NumTrades90Ever2DerogPubRec"],
-      "mutable": true,
-      "action_domain": {
-        "kind": "values",
-        "feature": "NumTrades90Ever2DerogPubRec",
-        "values": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
-      },
-      "special_values": [-9]
-    },
     "PercentTradesNeverDelq": {
       "type": 0,
-      "name": "PercentTradesNeverDelq",
-      "description": "Independent feature",
       "features": ["PercentTradesNeverDelq"],
       "mutable": true,
       "action_domain": {
@@ -255,8 +268,6 @@
     },
     "MSinceMostRecentDelq": {
       "type": 0,
-      "name": "MSinceMostRecentDelq",
-      "description": "Independent feature",
       "features": ["MSinceMostRecentDelq"],
       "mutable": true,
       "action_domain": {
@@ -270,30 +281,8 @@
       },
       "special_values": [-9, -8, -7]
     },
-    "NumTotalTrades": {
-      "type": 0,
-      "name": "NumTotalTrades",
-      "description": "Independent feature",
-      "features": ["NumTotalTrades"],
-      "mutable": true,
-      "action_domain": {
-        "kind": "values",
-        "feature": "NumTotalTrades",
-        "values": [
-          0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-          20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0,
-          40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0,
-          60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0, 67.0, 68.0, 69.0, 70.0, 71.0, 72.0, 73.0, 74.0, 75.0, 76.0, 77.0, 78.0, 79.0,
-          80.0, 81.0, 82.0, 83.0, 84.0, 85.0, 86.0, 87.0, 88.0, 89.0, 90.0, 91.0, 92.0, 93.0, 94.0, 95.0, 96.0, 97.0, 98.0, 99.0,
-          100.0, 101.0, 102.0, 103.0, 104.0
-        ]
-      },
-      "special_values": [-9]
-    },
     "NumTradesOpeninLast12M": {
       "type": 0,
-      "name": "NumTradesOpeninLast12M",
-      "description": "Independent feature",
       "features": ["NumTradesOpeninLast12M"],
       "mutable": true,
       "action_domain": {
@@ -305,8 +294,6 @@
     },
     "PercentInstallTrades": {
       "type": 0,
-      "name": "PercentInstallTrades",
-      "description": "Independent feature",
       "features": ["PercentInstallTrades"],
       "mutable": true,
       "action_domain": {
@@ -322,8 +309,6 @@
     },
     "MSinceMostRecentInqexcl7days": {
       "type": 0,
-      "name": "MSinceMostRecentInqexcl7days",
-      "description": "Independent feature",
       "features": ["MSinceMostRecentInqexcl7days"],
       "mutable": true,
       "action_domain": {
@@ -336,46 +321,8 @@
       },
       "special_values": [-9, -8, -7]
     },
-    "NumInqLast6M": {
-      "type": 0,
-      "name": "NumInqLast6M",
-      "description": "Independent feature",
-      "features": ["NumInqLast6M"],
-      "mutable": true,
-      "action_domain": {
-        "kind": "values",
-        "feature": "NumInqLast6M",
-        "values": [
-          0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-          20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0,
-          40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0,
-          60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0
-        ]
-      },
-      "special_values": [-9]
-    },
-    "NumInqLast6Mexcl7days": {
-      "type": 0,
-      "name": "NumInqLast6Mexcl7days",
-      "description": "Independent feature",
-      "features": ["NumInqLast6Mexcl7days"],
-      "mutable": true,
-      "action_domain": {
-        "kind": "values",
-        "feature": "NumInqLast6Mexcl7days",
-        "values": [
-          0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0,
-          20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0, 27.0, 28.0, 29.0, 30.0, 31.0, 32.0, 33.0, 34.0, 35.0, 36.0, 37.0, 38.0, 39.0,
-          40.0, 41.0, 42.0, 43.0, 44.0, 45.0, 46.0, 47.0, 48.0, 49.0, 50.0, 51.0, 52.0, 53.0, 54.0, 55.0, 56.0, 57.0, 58.0, 59.0,
-          60.0, 61.0, 62.0, 63.0, 64.0, 65.0, 66.0
-        ]
-      },
-      "special_values": [-9]
-    },
     "NetFractionRevolvingBurden": {
       "type": 0,
-      "name": "NetFractionRevolvingBurden",
-      "description": "Independent feature",
       "features": ["NetFractionRevolvingBurden"],
       "mutable": true,
       "action_domain": {
@@ -392,8 +339,6 @@
     },
     "NetFractionInstallBurden": {
       "type": 0,
-      "name": "NetFractionInstallBurden",
-      "description": "Independent feature",
       "features": ["NetFractionInstallBurden"],
       "mutable": true,
       "action_domain": {
@@ -418,8 +363,6 @@
     },
     "NumRevolvingTradesWBalance": {
       "type": 0,
-      "name": "NumRevolvingTradesWBalance",
-      "description": "Independent feature",
       "features": ["NumRevolvingTradesWBalance"],
       "mutable": true,
       "action_domain": {
@@ -434,8 +377,6 @@
     },
     "NumInstallTradesWBalance": {
       "type": 0,
-      "name": "NumInstallTradesWBalance",
-      "description": "Independent feature",
       "features": ["NumInstallTradesWBalance"],
       "mutable": true,
       "action_domain": {
@@ -450,8 +391,6 @@
     },
     "NumBank2NatlTradesWHighUtilization": {
       "type": 0,
-      "name": "NumBank2NatlTradesWHighUtilization",
-      "description": "Independent feature",
       "features": ["NumBank2NatlTradesWHighUtilization"],
       "mutable": true,
       "action_domain": {
@@ -463,8 +402,6 @@
     },
     "PercentTradesWBalance": {
       "type": 0,
-      "name": "PercentTradesWBalance",
-      "description": "Independent feature",
       "features": ["PercentTradesWBalance"],
       "mutable": true,
       "action_domain": {
@@ -480,8 +417,6 @@
     },
     "MaxDelq2PublicRecLast12M": {
       "type": 0,
-      "name": "MaxDelq2PublicRecLast12M",
-      "description": "Independent feature",
       "features": ["MaxDelq2PublicRecLast12M"],
       "mutable": true,
       "action_domain": {
@@ -492,8 +427,6 @@
     },
     "MaxDelqEver": {
       "type": 0,
-      "name": "MaxDelqEver",
-      "description": "Independent feature",
       "features": ["MaxDelqEver"],
       "mutable": true,
       "action_domain": {
@@ -515,8 +448,6 @@
     },
     "num_of_prev_attempts": {
       "type": 0,
-      "name": "num_of_prev_attempts",
-      "description": "Independent feature",
       "features": ["num_of_prev_attempts"],
       "mutable": false,
       "action_domain": {
@@ -526,8 +457,6 @@
     },
     "weight": {
       "type": 0,
-      "name": "weight",
-      "description": "Independent feature",
       "features": ["weight"],
       "mutable": false,
       "action_domain": {
@@ -537,8 +466,6 @@
     },
     "weighted_score": {
       "type": 0,
-      "name": "weighted_score",
-      "description": "Independent feature",
       "features": ["weighted_score"],
       "mutable": true,
       "action_domain": {
@@ -552,8 +479,6 @@
     },
     "forumng_click": {
       "type": 0,
-      "name": "forumng_click",
-      "description": "Independent feature",
       "features": ["forumng_click"],
       "mutable": true,
       "action_domain": {
@@ -577,8 +502,6 @@
     },
     "homepage_click": {
       "type": 0,
-      "name": "homepage_click",
-      "description": "Independent feature",
       "features": ["homepage_click"],
       "mutable": true,
       "action_domain": {
@@ -602,8 +525,6 @@
     },
     "oucontent_click": {
       "type": 0,
-      "name": "oucontent_click",
-      "description": "Independent feature",
       "features": ["oucontent_click"],
       "mutable": true,
       "action_domain": {
@@ -623,8 +544,6 @@
     },
     "resource_click": {
       "type": 0,
-      "name": "resource_click",
-      "description": "Independent feature",
       "features": ["resource_click"],
       "mutable": true,
       "action_domain": {
@@ -673,8 +592,6 @@
     },
     "subpage_click": {
       "type": 0,
-      "name": "subpage_click",
-      "description": "Independent feature",
       "features": ["subpage_click"],
       "mutable": true,
       "action_domain": {
@@ -700,8 +617,6 @@
     },
     "url_click": {
       "type": 0,
-      "name": "url_click",
-      "description": "Independent feature",
       "features": ["url_click"],
       "mutable": true,
       "action_domain": {
@@ -749,8 +664,6 @@
     },
     "dataplus_click": {
       "type": 0,
-      "name": "dataplus_click",
-      "description": "Independent feature",
       "features": ["dataplus_click"],
       "mutable": true,
       "action_domain": {
@@ -770,8 +683,6 @@
     },
     "glossary_click": {
       "type": 0,
-      "name": "glossary_click",
-      "description": "Independent feature",
       "features": ["glossary_click"],
       "mutable": true,
       "action_domain": {
@@ -833,8 +744,6 @@
     },
     "oucollaborate_click": {
       "type": 0,
-      "name": "oucollaborate_click",
-      "description": "Independent feature",
       "features": ["oucollaborate_click"],
       "mutable": true,
       "action_domain": {
@@ -862,8 +771,6 @@
     },
     "quiz_click": {
       "type": 0,
-      "name": "quiz_click",
-      "description": "Independent feature",
       "features": ["quiz_click"],
       "mutable": true,
       "action_domain": {
@@ -890,8 +797,6 @@
     },
     "ouelluminate_click": {
       "type": 0,
-      "name": "ouelluminate_click",
-      "description": "Independent feature",
       "features": ["ouelluminate_click"],
       "mutable": true,
       "action_domain": {
@@ -919,8 +824,6 @@
     },
     "sharedsubpage_click": {
       "type": 0,
-      "name": "sharedsubpage_click",
-      "description": "Independent feature",
       "features": ["sharedsubpage_click"],
       "mutable": true,
       "action_domain": {
@@ -931,8 +834,6 @@
     },
     "questionnaire_click": {
       "type": 0,
-      "name": "questionnaire_click",
-      "description": "Independent feature",
       "features": ["questionnaire_click"],
       "mutable": true,
       "action_domain": {
@@ -949,8 +850,6 @@
     },
     "page_click": {
       "type": 0,
-      "name": "page_click",
-      "description": "Independent feature",
       "features": ["page_click"],
       "mutable": true,
       "action_domain": {
@@ -979,8 +878,6 @@
     },
     "externalquiz_click": {
       "type": 0,
-      "name": "externalquiz_click",
-      "description": "Independent feature",
       "features": ["externalquiz_click"],
       "mutable": true,
       "action_domain": {
@@ -1010,8 +907,6 @@
     },
     "ouwiki_click": {
       "type": 0,
-      "name": "ouwiki_click",
-      "description": "Independent feature",
       "features": ["ouwiki_click"],
       "mutable": true,
       "action_domain": {
@@ -1037,8 +932,6 @@
     },
     "dualpane_click": {
       "type": 0,
-      "name": "dualpane_click",
-      "description": "Independent feature",
       "features": ["dualpane_click"],
       "mutable": true,
       "action_domain": {
@@ -1054,8 +947,6 @@
     },
     "folder_click": {
       "type": 0,
-      "name": "folder_click",
-      "description": "Independent feature",
       "features": ["folder_click"],
       "mutable": true,
       "action_domain": {
@@ -1066,8 +957,6 @@
     },
     "repeatactivity_click": {
       "type": 0,
-      "name": "repeatactivity_click",
-      "description": "Independent feature",
       "features": ["repeatactivity_click"],
       "mutable": true,
       "action_domain": {
@@ -1078,8 +967,6 @@
     },
     "htmlactivity_click": {
       "type": 0,
-      "name": "htmlactivity_click",
-      "description": "Independent feature",
       "features": ["htmlactivity_click"],
       "mutable": true,
       "action_domain": {
@@ -1093,8 +980,6 @@
     },
     "code_module": {
       "type": 0,
-      "name": "code_module",
-      "description": "Independent feature",
       "features": ["code_module"],
       "mutable": false,
       "action_domain": {
@@ -1104,8 +989,6 @@
     },
     "gender": {
       "type": 0,
-      "name": "gender",
-      "description": "Independent feature",
       "features": ["gender"],
       "mutable": false,
       "action_domain": {
@@ -1115,8 +998,6 @@
     },
     "region": {
       "type": 0,
-      "name": "region",
-      "description": "Independent feature",
       "features": ["region"],
       "mutable": false,
       "action_domain": {
@@ -1126,8 +1007,6 @@
     },
     "highest_education": {
       "type": 0,
-      "name": "highest_education",
-      "description": "Independent feature",
       "features": ["highest_education"],
       "mutable": true,
       "action_domain": {
@@ -1138,8 +1017,6 @@
     },
     "imd_band": {
       "type": 0,
-      "name": "imd_band",
-      "description": "Independent feature",
       "features": ["imd_band"],
       "mutable": false,
       "action_domain": {
@@ -1149,8 +1026,6 @@
     },
     "age_band": {
       "type": 0,
-      "name": "age_band",
-      "description": "Independent feature",
       "features": ["age_band"],
       "mutable": false,
       "action_domain": {
@@ -1160,8 +1035,6 @@
     },
     "studied_credits": {
       "type": 0,
-      "name": "studied_credits",
-      "description": "Independent feature",
       "features": ["studied_credits"],
       "mutable": true,
       "action_domain": {
@@ -1180,8 +1053,6 @@
     },
     "disability": {
       "type": 0,
-      "name": "disability",
-      "description": "Independent feature",
       "features": ["disability"],
       "mutable": false,
       "action_domain": {
@@ -1199,8 +1070,6 @@
     },
     "LIMIT_BAL": {
       "type": 0,
-      "name": "LIMIT_BAL",
-      "description": "Independent feature",
       "features": ["LIMIT_BAL"],
       "mutable": true,
       "action_domain": {
@@ -1216,8 +1085,6 @@
     },
     "AGE": {
       "type": 0,
-      "name": "AGE",
-      "description": "Independent feature",
       "features": ["AGE"],
       "mutable": false,
       "action_domain": {
@@ -1227,8 +1094,6 @@
     },
     "PAY_0": {
       "type": 0,
-      "name": "PAY_0",
-      "description": "Independent feature",
       "features": ["PAY_0"],
       "mutable": true,
       "action_domain": {
@@ -1239,8 +1104,6 @@
     },
     "PAY_2": {
       "type": 0,
-      "name": "PAY_2",
-      "description": "Independent feature",
       "features": ["PAY_2"],
       "mutable": true,
       "action_domain": {
@@ -1251,8 +1114,6 @@
     },
     "PAY_3": {
       "type": 0,
-      "name": "PAY_3",
-      "description": "Independent feature",
       "features": ["PAY_3"],
       "mutable": true,
       "action_domain": {
@@ -1263,8 +1124,6 @@
     },
     "PAY_4": {
       "type": 0,
-      "name": "PAY_4",
-      "description": "Independent feature",
       "features": ["PAY_4"],
       "mutable": true,
       "action_domain": {
@@ -1275,8 +1134,6 @@
     },
     "PAY_5": {
       "type": 0,
-      "name": "PAY_5",
-      "description": "Independent feature",
       "features": ["PAY_5"],
       "mutable": true,
       "action_domain": {
@@ -1287,8 +1144,6 @@
     },
     "PAY_6": {
       "type": 0,
-      "name": "PAY_6",
-      "description": "Independent feature",
       "features": ["PAY_6"],
       "mutable": true,
       "action_domain": {
@@ -1299,8 +1154,6 @@
     },
     "BILL_AMT1": {
       "type": 0,
-      "name": "BILL_AMT1",
-      "description": "Independent feature",
       "features": ["BILL_AMT1"],
       "mutable": true,
       "action_domain": {
@@ -1320,8 +1173,6 @@
     },
     "BILL_AMT2": {
       "type": 0,
-      "name": "BILL_AMT2",
-      "description": "Independent feature",
       "features": ["BILL_AMT2"],
       "mutable": true,
       "action_domain": {
@@ -1341,8 +1192,6 @@
     },
     "BILL_AMT3": {
       "type": 0,
-      "name": "BILL_AMT3",
-      "description": "Independent feature",
       "features": ["BILL_AMT3"],
       "mutable": true,
       "action_domain": {
@@ -1368,8 +1217,6 @@
     },
     "BILL_AMT4": {
       "type": 0,
-      "name": "BILL_AMT4",
-      "description": "Independent feature",
       "features": ["BILL_AMT4"],
       "mutable": true,
       "action_domain": {
@@ -1390,8 +1237,6 @@
     },
     "BILL_AMT5": {
       "type": 0,
-      "name": "BILL_AMT5",
-      "description": "Independent feature",
       "features": ["BILL_AMT5"],
       "mutable": true,
       "action_domain": {
@@ -1412,8 +1257,6 @@
     },
     "BILL_AMT6": {
       "type": 0,
-      "name": "BILL_AMT6",
-      "description": "Independent feature",
       "features": ["BILL_AMT6"],
       "mutable": true,
       "action_domain": {
@@ -1436,8 +1279,6 @@
     },
     "PAY_AMT1": {
       "type": 0,
-      "name": "PAY_AMT1",
-      "description": "Independent feature",
       "features": ["PAY_AMT1"],
       "mutable": true,
       "action_domain": {
@@ -1476,8 +1317,6 @@
     },
     "PAY_AMT2": {
       "type": 0,
-      "name": "PAY_AMT2",
-      "description": "Independent feature",
       "features": ["PAY_AMT2"],
       "mutable": true,
       "action_domain": {
@@ -1526,8 +1365,6 @@
     },
     "PAY_AMT3": {
       "type": 0,
-      "name": "PAY_AMT3",
-      "description": "Independent feature",
       "features": ["PAY_AMT3"],
       "mutable": true,
       "action_domain": {
@@ -1565,8 +1402,6 @@
     },
     "PAY_AMT4": {
       "type": 0,
-      "name": "PAY_AMT4",
-      "description": "Independent feature",
       "features": ["PAY_AMT4"],
       "mutable": true,
       "action_domain": {
@@ -1598,8 +1433,6 @@
     },
     "PAY_AMT5": {
       "type": 0,
-      "name": "PAY_AMT5",
-      "description": "Independent feature",
       "features": ["PAY_AMT5"],
       "mutable": true,
       "action_domain": {
@@ -1625,8 +1458,6 @@
     },
     "PAY_AMT6": {
       "type": 0,
-      "name": "PAY_AMT6",
-      "description": "Independent feature",
       "features": ["PAY_AMT6"],
       "mutable": true,
       "action_domain": {
@@ -1653,8 +1484,6 @@
     },
     "SEX": {
       "type": 0,
-      "name": "SEX",
-      "description": "Independent feature",
       "features": ["SEX"],
       "mutable": false,
       "action_domain": {
@@ -1664,8 +1493,6 @@
     },
     "EDUCATION": {
       "type": 0,
-      "name": "EDUCATION",
-      "description": "Independent feature",
       "features": ["EDUCATION"],
       "mutable": false,
       "action_domain": {
@@ -1675,8 +1502,6 @@
     },
     "MARRIAGE": {
       "type": 0,
-      "name": "MARRIAGE",
-      "description": "Independent feature",
       "features": ["MARRIAGE"],
       "mutable": false,
       "action_domain": {

@@ -37,6 +37,10 @@
         "MaxDelq2PublicRecLast12M",
         "MaxDelqEver"
     ],
+    "immutable_columns": [
+        "ExternalRiskEstimate",
+        "MSinceOldestTradeOpen"
+    ],
     "encoder_dims": [
         35,
         100,

@@ -42,6 +42,16 @@
         "studied_credits",
         "disability"
     ],
+    "immutable_columns": [
+        "num_of_prev_attempts",
+        "weight",
+        "code_module",
+        "gender",
+        "region",
+        "imd_band",
+        "age_band",
+        "disability"
+    ],
     "encoder_dims": [
         127,
         100,

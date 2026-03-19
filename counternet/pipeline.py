@@ -1,13 +1,12 @@
 __all__ = ['pl_logger', 'load_trained_model', 'coord_sparsity_and_manifold', 'ModelTrainer', 'CFGeneratorBase',
-           'LocalCFGenerator', 'is_predictive_model', 'GlobalCFGenerator', 'Evaluator', 'Experiment']
+           'LocalCFGenerator', 'is_predictive_model', 'GlobalCFGenerator', 'Evaluator']
 
 from .import_essentials import *
 from .utils import *
-from .training_module import BaseModule, CFNetTrainingModule
-from .model import BaselinePredictiveModel, CounterNetModel
+from .training_module import BaseModule
+from .model import BaselinePredictiveModel
 from .base_interface import LocalExplainerBase, GlobalExplainerBase, ExplainerBase
-from .cf_explainer import VanillaCF
-from .evaluation import SensitivityMetric, proximity
+from .evaluation import proximity
 from .recourse_constraints import add_actionability_to_results
 from sklearn.neighbors import NearestNeighbors
 import json
@@ -104,44 +103,6 @@ def coord_sparsity_and_manifold(pred_model: BaseModule,
 
     manifold_dist = float(np.nanmean(dists_out)) if not np.all(np.isnan(dists_out)) else float('nan')
     return sparsity, manifold_dist
-
-
-def _to_feature_space(pred_model: BaseModule, X: torch.Tensor) -> torch.Tensor:
-    """
-    Map from the model's coordinate space (continuous + one-hot categoricals)
-    to a feature-level space: [cont_1, ..., cont_C, disc_1, ..., disc_D]
-    """
-    # continuous then categorical part
-    cat_idx = pred_model.cat_normalizer.cat_idx
-    categories = pred_model.cat_normalizer.categories
-
-    # split continuous and categorical coordinates
-    X_cont = X[:, :cat_idx]
-    if not categories:
-        return X_cont
-
-    X_cat = X[:, cat_idx:]
-
-    feat_parts = [X_cont]
-
-    start = 0
-    for cats in categories:
-        k = len(cats)
-        if k == 0:
-            continue
-
-        seg = X_cat[:, start:start + k]
-        idx = seg.argmax(dim=1)
-
-        if k > 1:
-            val = idx.float() / float(k - 1) # [0, 1]
-        else:
-            val = torch.zeros_like(idx, dtype=torch.float)
-
-        feat_parts.append(val.unsqueeze(-1))
-        start += k
-
-    return torch.cat(feat_parts, dim=1) # (n_samples, C + D)
 
 
 def _json_dumps(obj: Any) -> str:
@@ -376,6 +337,97 @@ class CFGeneratorBase(ABC):
         except Exception:
             self.results.update({'cat_idx': None})
 
+    def _resolve_dataset_and_size(
+        self,
+        dataset: Optional[TensorDataset],
+        test_size: Optional[int],
+        debug: bool,
+    ) -> tuple[TensorDataset, int]:
+        if dataset is None:
+            dataset = self.pred_model.test_dataset
+        if test_size is None:
+            size = len(dataset) if not debug else min(3, len(dataset))
+        else:
+            size = min(int(test_size), len(dataset))
+        return dataset, size
+
+    def _target_cf_labels(self, y_hat: torch.Tensor) -> torch.Tensor:
+        if self.configs.get("cf_target_filter") == "flip_neg_stay_pos":
+            return torch.ones_like(y_hat)
+        return flip_binary(y_hat)
+
+    def _finalize_results(
+        self,
+        *,
+        x: torch.Tensor,
+        cf: torch.Tensor,
+        y: torch.Tensor,
+        total_time: float,
+        avg_time: float,
+    ) -> Dict[str, Any]:
+        y_hat = self.pred_model.predict(x)
+        cf_y_hat = self.pred_model.predict(cf)
+
+        sensitivity = self.pred_model.sensitivity
+        sensitivity.reset()
+
+        cf_y = self._target_cf_labels(y_hat)
+
+        self.results.update({
+            'x': x,
+            'cf': cf,
+            'y': y,
+            'y_hat': y_hat,
+            'cf_y': cf_y,
+            'cf_y_hat': cf_y_hat,
+            'sensitivity': sensitivity(x, cf, cf_y).item(),
+            'total_time': total_time,
+            'avg_time': avg_time,
+        })
+
+        eps = self.configs.get('sparsity_eps', 0.05)
+        k = self.configs.get('manifold_k', 1)
+        neg_mask = (y_hat == 0).reshape(-1)
+
+        if neg_mask.sum() > 0:
+            sparsity_val, man_dist = coord_sparsity_and_manifold(
+                self.pred_model,
+                x[neg_mask],
+                cf[neg_mask],
+                target_y=cf_y[neg_mask],
+                ref_model=self.ref_model,
+                eps=eps,
+                n_neighbors=k,
+            )
+        else:
+            sparsity_val, man_dist = float('nan'), float('nan')
+
+        self.results.update({
+            'sparsity': sparsity_val,
+            'manifold_dist': man_dist,
+        })
+
+        add_actionability_to_results(
+            results=self.results,
+            pred_model=self.pred_model,
+            configs=self.configs,
+            x=x,
+            cf=cf,
+            y_hat=y_hat,
+        )
+
+        _add_recourse_examples_to_results(
+            results=self.results,
+            pred_model=self.pred_model,
+            configs=self.configs,
+            x=x,
+            cf=cf,
+            y_hat=y_hat,
+            cf_y_hat=cf_y_hat,
+        )
+
+        return self.results
+
     def generate(self, dataset: Optional[TensorDataset]=None, test_size: Optional[int] = None, debug: bool = False):
         raise NotImplementedError
 
@@ -422,12 +474,7 @@ class LocalCFGenerator(CFGeneratorBase):
         return X, cf_algo
 
     def generate(self, dataset: Optional[TensorDataset] = None, test_size: Optional[int] = None, debug: bool = False):
-        if dataset is None:
-            dataset = self.pred_model.test_dataset
-        if test_size is None:
-            size = len(dataset) if not debug else 3
-        else:
-            size = test_size
+        dataset, size = self._resolve_dataset_and_size(dataset, test_size, debug)
 
         result = []
 
@@ -443,74 +490,16 @@ class LocalCFGenerator(CFGeneratorBase):
             print(f"generating {size} cfs...")
             result, time = self.iterative_generate(size, dataset)
 
-        self.results.update(time)
-
         x, cf = self.__unpack_x_cf(result)
         _, y = dataset[:]
         y = y[:size]
-        y_hat = self.pred_model.predict(x)
-        cf_y_hat = self.pred_model.predict(cf)
-
-        sensitivity = self.pred_model.sensitivity
-        sensitivity.reset()
-
-        if self.configs.get("cf_target_filter") == "flip_neg_stay_pos":
-            cf_y = torch.ones_like(y_hat)
-        else:
-            cf_y = flip_binary(y_hat)
-
-        self.results.update({
-            'x': x,
-            'cf': cf,
-            'y': y,
-            'y_hat': y_hat,
-            'cf_y': cf_y,
-            'cf_y_hat': cf_y_hat,
-        })
-        self.results.update({'sensitivity': sensitivity(x, cf, cf_y).item()})
-
-        eps = self.configs.get('sparsity_eps', 0.05)
-        k = self.configs.get('manifold_k', 1)
-        neg_mask = (y_hat == 0).reshape(-1)
-
-        if neg_mask.sum() > 0:
-            sparsity_val, man_dist = coord_sparsity_and_manifold(
-                self.pred_model,
-                x[neg_mask],
-                cf[neg_mask],
-                target_y=cf_y[neg_mask],
-                ref_model=self.ref_model,
-                eps=eps, n_neighbors=k
-            )
-        else:
-            sparsity_val, man_dist = float('nan'), float('nan')
-
-        self.results.update({
-            'sparsity': sparsity_val,
-            'manifold_dist': man_dist,
-        })
-
-        # Actionability (constraints from action_groups.json)
-        add_actionability_to_results(
-            results=self.results,
-            pred_model=self.pred_model,
-            configs=self.configs,
+        return self._finalize_results(
             x=x,
             cf=cf,
-            y_hat=y_hat,
+            y=y,
+            total_time=float(time['total_time']),
+            avg_time=float(time['avg_time']),
         )
-
-        _add_recourse_examples_to_results(
-            results=self.results,
-            pred_model=self.pred_model,
-            configs=self.configs,
-            x=x,
-            cf=cf,
-            y_hat=y_hat,
-            cf_y_hat=cf_y_hat,
-        )
-
-        return self.results
 
 
 def is_predictive_model(model: BaseModule):
@@ -530,15 +519,12 @@ class GlobalCFGenerator(CFGeneratorBase):
         super().__init__(cf_algo, pred_model, configs, ref_model=ref_model)
 
     def generate(self, dataset: Optional[TensorDataset]=None, test_size: Optional[int] = None, debug: bool = False):
-        if dataset is None:
-            dataset = self.pred_model.test_dataset
-        if test_size is None:
-            size = len(dataset) if not debug else 3
-        else:
-            size = test_size
+        dataset, size = self._resolve_dataset_and_size(dataset, test_size, debug)
         x, y = dataset[:]
+        x = x[:size]
+        y = y[:size]
 
-        print(f"generating {len(dataset)} cfs...")
+        print(f"generating {size} cfs...")
         cf = self.cf_algo.generate_cf(x)
 
         print(f"evaluating speed...")
@@ -548,72 +534,13 @@ class GlobalCFGenerator(CFGeneratorBase):
                 self.cf_algo.generate_cf(sample.reshape(1, -1))
         total_time = time.time() - start_time
         avg_time = total_time / size
-
-        y_hat = self.pred_model.predict(x)
-        cf_y_hat = self.pred_model.predict(cf)
-
-        sensitivity = self.pred_model.sensitivity
-        sensitivity.reset()
-
-        if self.configs.get("cf_target_filter") == "flip_neg_stay_pos":
-            cf_y = torch.ones_like(y_hat)
-        else:
-            cf_y = flip_binary(y_hat)
-
-        self.results.update({
-            'x': x,
-            'cf': cf,
-            'y': y,
-            'y_hat': y_hat,
-            'cf_y': cf_y,
-            'cf_y_hat': cf_y_hat,
-        })
-        self.results.update({'sensitivity': sensitivity(x, cf, cf_y).item()})
-        self.results.update({'total_time': total_time, 'avg_time': avg_time})
-
-        eps = self.configs.get('sparsity_eps', 0.05)
-        k = self.configs.get('manifold_k', 1)
-
-        neg_mask = (y_hat == 0).reshape(-1) # evaluate only on negatives
-
-        if neg_mask.sum() > 0:
-            sparsity_val, man_dist = coord_sparsity_and_manifold(
-                self.pred_model,
-                x[neg_mask],
-                cf[neg_mask],
-                target_y=cf_y[neg_mask],
-                ref_model=self.ref_model,
-                eps=eps, n_neighbors=k
-            )
-        else:
-            sparsity_val, man_dist = float('nan'), float('nan')
-
-        self.results.update({
-            'sparsity': sparsity_val,
-            'manifold_dist': man_dist,
-        })
-
-        # Actionability (constraints from action_groups.json)
-        add_actionability_to_results(
-            results=self.results,
-            pred_model=self.pred_model,
-            configs=self.configs,
+        return self._finalize_results(
             x=x,
             cf=cf,
-            y_hat=y_hat,
+            y=y,
+            total_time=total_time,
+            avg_time=avg_time,
         )
-
-        _add_recourse_examples_to_results(
-            results=self.results,
-            pred_model=self.pred_model,
-            configs=self.configs,
-            x=x,
-            cf=cf,
-            y_hat=y_hat,
-            cf_y_hat=cf_y_hat,
-        )
-
-        return self.results
 
 # Cell
 class Evaluator(object):
@@ -640,6 +567,7 @@ class Evaluator(object):
             'actionability_rate',
             'monotonicity_violation_rate',
             'immutability_violation_rate',
+            'group_rule_violation_rate',
             'avg_num_actionability_violations',
             'avg_num_actionability_changes',
             'valid_change_rate',
@@ -708,6 +636,7 @@ class Evaluator(object):
             'actionability_rate',
             'monotonicity_violation_rate',
             'immutability_violation_rate',
+            'group_rule_violation_rate',
             'avg_num_actionability_violations',
             'avg_num_actionability_changes',
             'valid_change_rate',
@@ -753,6 +682,7 @@ class Evaluator(object):
                 try:
                     gdf = pd.DataFrame.from_dict(gbd, orient='index')
                     sort_cols = [c for c in [
+                        'rule_violation_rate',
                         'monotonicity_violation_rate',
                         'immutability_violation_rate',
                         'change_rate',
@@ -766,135 +696,3 @@ class Evaluator(object):
         return final_result_df
 
 
-class Experiment(object):
-    def __init__(
-            self,
-            explainers: List[ExplainerBase],
-            m_configs: List[Dict[str, Any]],
-            t_configs: Optional[Dict[str, Any]] = None,
-            debug: bool = False,
-            results_root: Path = Path("assets/results")
-    ):
-        self.explainers = explainers
-        self.m_configs = m_configs
-        self.use_pred_model = False # need a `BaselinePredictiveModel` or not
-        self.pred_model = None      # init a `BaselinePredictiveModel` if neccesary
-        if t_configs is None:
-            self.t_configs = load_configs(Path('assets/configs/trainer.json'))
-        else:
-            self.t_configs = t_configs
-        self.__check_explainers()
-        self.debug = debug
-        self.results_root = Path(results_root)
-
-        self.evaluator = Evaluator(configs={'is_logging': True})
-
-    def __is_type(self, instance):
-        return isinstance(type(instance), type) or isinstance(type(instance), ABCMeta)
-
-    def __check_explainers(self):
-        for explainer in self.explainers: # explainer is already passed as a type
-            if self.__is_type(explainer):
-                explainer_type = deepcopy(explainer)
-                # explainer = explainer_type(self.m_configs[0])
-            else:
-                explainer_type = type(explainer)
-            if not issubclass(explainer_type, ExplainerBase):
-                raise ValueError(f"The explainer should be a subclass of `{ExplainerBase}`, but got `{explainer_type}`")
-            if not (isinstance(explainer, CounterNetModel) or (issubclass(explainer_type, CFNetTrainingModule))):
-                self.use_pred_model = True
-
-    def __check_seeds(self, seeds: Optional[List[int]]):
-        if seeds is not None and len(seeds) > 0:
-            return list(seeds)
-
-        env_seed = os.environ.get("PL_GLOBAL_SEED")
-        if env_seed is not None:
-            try:
-                return [int(env_seed)]
-            except ValueError:
-                pass
-
-        default_seed = 31
-        print(f"[INFO] No seed provided; defaulting to {default_seed}")
-        return [default_seed]
-
-    def __make_dir(self, dataset_name: str, seed: int, m_config: Optional[Dict[str, Any]] = None):
-        ablation_tag = "default"
-        if m_config is not None:
-            ablation_tag = m_config.get("ablation_tag", "default")
-
-        dir_path = self.results_root / ablation_tag / dataset_name / f"seed-{seed}"
-        dir_path.mkdir(parents=True, exist_ok=True)
-        return dir_path
-
-    def explainer_step(self, explainer: ExplainerBase, pred_model: BaselinePredictiveModel,
-            m_config: Dict[str, Any], dir_path: Path):
-        if not self.__is_type(explainer):
-            CFExplainer = type(explainer)
-        else:
-            CFExplainer = explainer
-        if issubclass(CFExplainer, GlobalExplainerBase):
-            if issubclass(CFExplainer, CFNetTrainingModule):
-                model = CFExplainer(m_config)
-            else:
-                model = CFExplainer(m_config, pred_model)
-
-            # train CounterNet
-            logger_name = f"{CFExplainer.__name__.lower()}/{m_config['dataset_name']}"
-            cfnet_trainer = ModelTrainer(model, self.t_configs, logger_name=logger_name)
-            cfnet_trainer.fit()
-
-            # Save best checkpoint
-            best_model_path = cfnet_trainer.save_best_model(dir_path)
-
-            # Reload the best checkpoint before generating CFs
-            try:
-                model = cfnet_trainer.load_trained_model(
-                    checkpoint_path=str(best_model_path),
-                    gpus=0,
-                )
-            except Exception as e:
-                pl_logger.warning(
-                    f"[WARN] Failed to reload best checkpoint from {best_model_path}: {e}"
-                )
-
-            cf_generator = GlobalCFGenerator(model, configs=m_config, ref_model=pred_model)
-
-        else:
-            print(f"Generating local explanation for {CFExplainer}")
-            local_cfg = dict(m_config)
-            if CFExplainer is VanillaCF:
-                local_cfg.pop("cf_target_filter", None)
-            cf_generator = LocalCFGenerator(
-                CFExplainer(pred_model.predict),
-                pred_model,
-                configs=local_cfg,
-                ref_model=pred_model
-            )
-        results = cf_generator.generate(debug=self.debug)
-        self.evaluator.eval(results, dir_path)
-
-    def experiment_step(self, m_config, seed: int):
-        # train a baseline predictive model
-        if self.use_pred_model:
-            print("training predictive model...")
-            pred_model_trainer = ModelTrainer(
-                BaselinePredictiveModel(m_config), self.t_configs, logger_name="pred_model")
-            pred_model = pred_model_trainer.fit()
-        else:
-            pred_model = None
-
-        dataset_name = m_config['dataset_name']
-        # logging dir
-        dir_path = self.__make_dir(dataset_name, seed, m_config)
-
-        for explainer in self.explainers:
-            self.explainer_step(explainer, pred_model, m_config, dir_path)
-
-    def run(self, seeds: Optional[List[int]] = None):
-        seeds = self.__check_seeds(seeds)
-        for seed in seeds:
-            seed_everything(seed, workers=True)
-            for m_config in self.m_configs:
-                self.experiment_step(m_config, seed)

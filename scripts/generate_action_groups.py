@@ -62,16 +62,12 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
         {
             "id": "Stop_New_Credit_Applications",
             "type": 2,
-            "name": "Stop new credit applications",
-            "description": "Part-whole (subset). Stopping new applications reduces recent inquiry counts.",
             "roles": {"base": ["NumInqLast6M"], "derived": ["NumInqLast6Mexcl7days"]},
             "rule": {"kind": "clip_derived_to_base", "params": {"base": "NumInqLast6M"}},
         },
         {
             "id": "Build_Satisfactory_Credit_History",
             "type": 2,
-            "name": "Build satisfactory credit history",
-            "description": "Part-whole (sum). Accumulating more satisfactory trades increases total trade count.",
             "roles": {"base": ["NumSatisfactoryTrades"], "derived": ["NumTotalTrades"]},
             "rule": {
                 "kind": "derived_adds_base_delta",
@@ -81,8 +77,6 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
         {
             "id": "Pay_Down_Revolving_Debt",
             "type": 4,
-            "name": "Pay down revolving debt",
-            "description": "Latent behavior. Paying down balances reduces utilization and high-utilization trade counts.",
             "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
             "rule": {"kind": "latent_shift", "params": {"scaling": "step_size"}},
         },
@@ -91,8 +85,6 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
         {
             "id": "Increase_Online_Participation",
             "type": 4,
-            "name": "Increase online participation",
-            "description": "Latent behavior. Active participation increases interaction counts for forums/content/homepage.",
             "features": ["forumng_click", "homepage_click", "subpage_click", "resource_click", "url_click", "oucontent_click"],
             "rule": {"kind": "latent_shift", "params": {"scaling": "step_size"}},
         }
@@ -101,16 +93,12 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
         {
             "id": "Reduce_Spending_Habits",
             "type": 3,
-            "name": "Reduce spending habits",
-            "description": "Momentum. Reducing spending habits lowers bill amounts sequentially over time.",
             "roles": {"time_order": ["BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6"]},
             "rule": {"kind": "exponential_smoothing", "params": {"alpha": 0.7}},
         },
         {
             "id": "Improve_Payment_Consistency",
             "type": 3,
-            "name": "Improve payment consistency",
-            "description": "Momentum. Paying on time improves the trajectory of payment status history.",
             "roles": {"time_order": ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]},
             "rule": {"kind": "sequential_consistency", "params": {}},
         },
@@ -119,7 +107,30 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
 '''
 GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
     "adult": [],
-    "home": [],
+    "home": [{
+            "id": "Stop_New_Credit_Applications",
+            "type": 2,
+            "roles": {"base": ["NumInqLast6M"], "derived": ["NumInqLast6Mexcl7days"]},
+            "rule": {"kind": "clip_derived_to_base", "params": {"base": "NumInqLast6M"}},
+        },
+        {
+            "id": "Build_Satisfactory_Credit_History",
+            "type": 2,
+            "roles": {"base": ["NumSatisfactoryTrades"], "derived": ["NumTotalTrades"]},
+            "rule": {
+                "kind": "derived_adds_base_delta",
+                "params": {"base": "NumSatisfactoryTrades", "derived": "NumTotalTrades"},
+            },
+        },
+        {
+            "id": "Reduce_More_Severe_Delinquencies",
+            "type": 2,
+            "roles": {"base": ["NumTrades60Ever2DerogPubRec"], "derived": ["NumTrades90Ever2DerogPubRec"]},
+            "rule": {
+                "kind": "clip_derived_to_base",
+                "params": {"base": "NumTrades60Ever2DerogPubRec"},
+            },
+        }],
     "student": [],
     "credit_card": []
 }
@@ -444,9 +455,6 @@ def compile_groups_for_dataset(
     for spec in group_specs:
         gid = spec["id"]
         gtype = int(spec["type"])
-        name = spec.get("name", gid.replace("_", " "))
-        desc = spec.get("description", "")
-
         if gtype not in {0, 1, 2, 3, 4, 5}:
             raise ValueError(f"Invalid group type {gtype} for group '{gid}' in dataset '{dataset}'.")
 
@@ -549,8 +557,6 @@ def compile_groups_for_dataset(
 
         group_obj: Dict[str, Any] = {
             "type": gtype,
-            "name": name,
-            "description": desc,
             "features": feats,
             "mutable": bool(group_mutable),
             "action_domain": action_domain,
@@ -581,8 +587,6 @@ def compile_groups_for_dataset(
             action_domain = {"kind": "noop", "values": [0]}
         group_obj2: Dict[str, Any] = {
             "type": 0,
-            "name": f,
-            "description": "Independent feature",
             "features": [f],
             "mutable": bool(group_mutable),
             "action_domain": action_domain,
