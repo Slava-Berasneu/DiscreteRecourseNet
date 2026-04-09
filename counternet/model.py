@@ -7,7 +7,14 @@ from .training_module import PredictiveTrainingModule, CFNetTrainingModule
 from .action_groups import (
     ActionGroupSpec,
     apply_deterministic_rule,
-    load_dataset_action_groups,
+)
+from .action_projection import (
+    ActionProjectionGroup,
+    ActionProjectionSpec,
+    action_feasibility_mask,
+    build_action_projection_spec,
+    load_supported_action_groups,
+    project_to_actionable,
 )
 
 from pathlib import Path
@@ -105,76 +112,44 @@ class CounterNetModel(CFNetTrainingModule):
 
 
 class CounterNetProjectionModel(CounterNetModel):
-    """CounterNet actionability baseline idea using projection of immutable features
-
-    After generating a counterfactual, we project immutable coordinates back to
-    the original input before computing losses or returning the CF.
-    """
+    """CounterNet baseline with inference-time projection onto the actionable set."""
 
     def __init__(self, config):
-        if 'immutable_columns' not in config:
-            raise ValueError(
-                "CounterNetProjectionModel requires 'immutable_columns' in the model config."
-            )
         super().__init__(config)
-        self.immutable_columns: List[str] = [str(c) for c in (config.get('immutable_columns') or [])]
-        self.register_buffer('_immutable_mask', torch.empty(0, dtype=torch.bool), persistent=False)
+        self.dataset_name: str = str(config.get("dataset_name", ""))
+        if not self.dataset_name:
+            raise ValueError("CounterNetProjectionModel requires 'dataset_name' in the model config.")
+
+        default_action_groups_path = Path(__file__).resolve().parents[1] / "assets" / "actions" / "action_groups.json"
+        self.action_groups_path = Path(config.get("action_groups_path", default_action_groups_path))
+        self._action_projection_spec: Optional[ActionProjectionSpec] = None
 
     def prepare_data(self):
         super().prepare_data()
-
-        feature_names = set(self.continous_cols) | set(self.discret_cols)
-        unknown = sorted(set(self.immutable_columns) - feature_names)
-        if unknown:
-            raise ValueError(
-                f"Unknown immutable_columns for dataset '{getattr(self.hparams, 'dataset_name', '')}': {unknown}"
-            )
-
-        mask = torch.zeros((self.enc_dims[0],), dtype=torch.bool)
-        cont_pos = {name: idx for idx, name in enumerate(self.continous_cols)}
-        disc_pos = {name: idx for idx, name in enumerate(self.discret_cols)}
-
-        for name in self.immutable_columns:
-            if name in cont_pos:
-                mask[cont_pos[name]] = True
-                continue
-
-            disc_idx = disc_pos[name]
-            start, end = self.cat_normalizer.cat_slices[disc_idx]
-            mask[start:end] = True
-
-        self._immutable_mask = mask
-
-    def _project_to_feasible(self, x: torch.Tensor, c: torch.Tensor) -> torch.Tensor:
-        """Project immutable coordinates back to the original input
-        """
-        if self._immutable_mask.numel() == 0 or not self._immutable_mask.any().item():
-            return c
-
-        if x.shape != c.shape:
-            raise ValueError(f"Expected x and c to have the same shape, got {x.shape} and {c.shape}.")
-
-        if self._immutable_mask.shape[0] != c.shape[1]:
-            raise RuntimeError(
-                f"Immutable mask width {self._immutable_mask.shape[0]} does not match input width {c.shape[1]}."
-            )
-
-        mask = self._immutable_mask.to(device=c.device).view(1, -1)
-        return torch.where(mask, x, c)
-
-    def forward(self, x, hard: bool = False):
-        y, c = self.model_forward(x)
-        c = self.cat_normalizer.normalize(c, hard=hard)
-        c = self._project_to_feasible(x, c)
-        return y, c
+        self._action_projection_spec = build_action_projection_spec(
+            action_groups_path=self.action_groups_path,
+            dataset_name=self.dataset_name,
+            continous_cols=self.continous_cols,
+            discret_cols=self.discret_cols,
+            scaler=self.scaler,
+            cat_normalizer=self.cat_normalizer,
+        )
 
     def generate_cf(self, x, clamp=False):
         self.freeze()
+        if self._action_projection_spec is None:
+            raise RuntimeError("CounterNetProjectionModel projection spec has not been prepared. Call prepare_data() first.")
+
         _, c = self.model_forward(x)
-        if clamp:
-            c = torch.clamp(c, 0., 1.)
-        c = self.cat_normalizer.normalize(c, hard=True)
-        return self._project_to_feasible(x, c)
+        cf_soft = self.cat_normalizer.normalize(c, hard=False)
+        if clamp and self.cat_normalizer.cat_idx > 0:
+            cf_soft = cf_soft.clone()
+            cf_soft[:, : self.cat_normalizer.cat_idx] = torch.clamp(
+                cf_soft[:, : self.cat_normalizer.cat_idx],
+                0.0,
+                1.0,
+            )
+        return project_to_actionable(x, cf_soft, self._action_projection_spec)
 
 
 class DiscreteRecourseNetModel(CFNetTrainingModule):
@@ -257,9 +232,11 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         # logits for each group's action domain, concatenated
         self.choice_head = nn.Linear(policy_input_dim, self.total_actions)
 
-        # Built after prepare_data: scaled domains + feature slices
+        # Built after prepare_data: shared actionable runtime metadata
         self._domains_built: bool = False
         self._sanity_logged: bool = False
+        self._action_runtime: Optional[ActionProjectionSpec] = None
+        self._group_cost_weights: List[float] = []
 
         # Soft (expected) counterfactual used for proximity loss during training
         self._last_c_soft: Optional[torch.Tensor] = None
@@ -272,45 +249,14 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
     # Action group parsing/build
     def _parse_action_groups(self) -> None:
-        dataset_action_groups = load_dataset_action_groups(
+        group_specs, inc_only, dec_only = load_supported_action_groups(
             self.action_groups_path,
             self.dataset_name,
+            learnable_only=True,
         )
-        self._inc_only = set(dataset_action_groups.increase_only)
-        self._dec_only = set(dataset_action_groups.decrease_only)
-
-        for spec in dataset_action_groups.groups:
-            gtype = int(spec.type)
-            if gtype not in (0, 1, 2):
-                continue
-
-            if gtype == 0:
-                # Type 0
-                if len(spec.features) != 1:
-                    continue
-            elif gtype in (1, 2):
-                # Type 1/2: base features define the action domain, derived are updated by constraint
-                if not spec.base_features:
-                    raise ValueError(
-                        f"Type {gtype} group '{spec.id}' in dataset '{self.dataset_name}' "
-                        f"must define roles.base"
-                    )
-                if not spec.derived_features:
-                    raise ValueError(
-                        f"Type {gtype} group '{spec.id}' in dataset '{self.dataset_name}' "
-                        f"must define roles.derived"
-                    )
-                if len(spec.base_features) != 1:
-                    raise ValueError(
-                        f"Type {gtype} group '{spec.id}': only single-base groups are currently supported, "
-                        f"got base={list(spec.base_features)}"
-                    )
-
-            # Ignore groups that are not directly controlled
-            if not spec.is_learnable_values_group():
-                continue
-
-            self._group_specs.append(spec)
+        self._group_specs = list(group_specs)
+        self._inc_only = set(inc_only)
+        self._dec_only = set(dec_only)
 
     def _default_cost_weight(self, gid: str, feat: str, kind: str, action_size: int) -> float:
         # can be overridden by config
@@ -327,189 +273,58 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
     def prepare_data(self):
         super().prepare_data()
-        self._ensure_action_domains()
+        self._ensure_action_runtime()
 
-    @staticmethod
-    def _resolve_category_domain_indices(
-        *,
-        feat: str,
-        values: List[Any],
-        categories: List[Any],
-    ) -> List[int]:
-        """Map categorical action domain values to category indices."""
-        cat_to_index = {c: j for j, c in enumerate(categories)}
-        domain_cat_indices: List[int] = []
-
-        for value in values:
-            if value in cat_to_index:
-                domain_cat_indices.append(int(cat_to_index[value]))
-                continue
-
-            # Numeric coercion handles JSON int vs numpy scalar mismatches.
-            found = False
-            for category, index in cat_to_index.items():
-                try:
-                    if float(category) == float(value):
-                        domain_cat_indices.append(int(index))
-                        found = True
-                        break
-                except Exception:
-                    continue
-
-            if not found:
-                raise ValueError(
-                    f"Domain value '{value}' for feature '{feat}' not found in fitted categories."
-                )
-
-        return domain_cat_indices
-
-    def _ensure_action_domains(self) -> None:
-        """Build action domain tensors in preprocessed input space.
-
-        Continuous:
-          - store (A,) scaled target values using fitted MinMaxScaler
-        Categorical:
-          - store (A, m) one-hot target blocks using fitted OneHotEncoder categories
-          - store (m,) map from category index -> position in domain list (for monotonic constraint masking)
-        """
+    def _ensure_action_runtime(self) -> None:
         if self._domains_built:
             return
 
-        cont_cols: List[str] = list(self.continous_cols or [])
-        disc_cols: List[str] = list(self.discret_cols or [])
-        cont_pos = {f: i for i, f in enumerate(cont_cols)}
-        disc_pos = {f: i for i, f in enumerate(disc_cols)}
+        self._action_runtime = build_action_projection_spec(
+            action_groups_path=self.action_groups_path,
+            dataset_name=self.dataset_name,
+            continous_cols=self.continous_cols,
+            discret_cols=self.discret_cols,
+            scaler=self.scaler,
+            cat_normalizer=self.cat_normalizer,
+            group_specs=self._group_specs,
+            increase_only=self._inc_only,
+            decrease_only=self._dec_only,
+        )
+        runtime_groups = list(self._action_runtime.groups)
+        self._group_cost_weights = [
+            self._default_cost_weight(
+                group.id,
+                str(group.base_feature),
+                group.kind,
+                int(group.action_size),
+            )
+            for group in runtime_groups
+        ]
 
-        categories = getattr(self.cat_normalizer, "categories", [])
-        cat_slices = getattr(self.cat_normalizer, "cat_slices", [])
+        if len(runtime_groups) != self.num_groups:
+            raise RuntimeError(
+                f"Action runtime built {len(runtime_groups)} groups, but the model expects {self.num_groups}."
+            )
 
-        self._group_meta: List[Dict[str, Any]] = []
-        for gi, spec in enumerate(self._group_specs):
-            feat = spec.base_feature
-            if feat is None:
-                raise ValueError("Expected every learnable action group to have a base feature.")
-            vals = list(spec.action_values)
-
-            if feat in cont_pos:
-                j = int(cont_pos[feat])
-
-                raw = torch.tensor([float(v) for v in vals], dtype=torch.float32)
-                # processing.MinMaxScaler with scalar tensor attributes `min_` and `max_` over all continuous values
-                denom = (self.scaler.max_ - self.scaler.min_)
-                if float(denom) == 0.0:
-                    denom = torch.tensor(1.0, dtype=torch.float32)
-                dom = (raw - self.scaler.min_) / denom
-                self.register_buffer(f"_ag_dom_{gi}", dom)
-                
-                self.register_buffer(f"_ag_idx_{gi}", torch.arange(int(spec.action_size), dtype=torch.float32))
-                w = self._default_cost_weight(spec.id, feat, "continuous", int(spec.action_size))
-                raw_vals = [float(v) for v in vals]
-                step = float(raw_vals[1] - raw_vals[0]) if len(raw_vals) > 1 else 1.0
-                self._group_meta.append(
-                    {
-                        "id": spec.id,
-                        "feature": feat,
-                        "kind": "continuous",
-                        "cont_index": j,
-                        "action_size": int(spec.action_size),
-                        "increase_only": feat in self._inc_only,
-                        "decrease_only": feat in self._dec_only,
-                        "cost_weight": w,
-                        "raw_v0": float(raw_vals[0]),
-                        "raw_step": step,
-                        "special_values": [float(v) for v in spec.special_values_for(feat)],
-                    }
-                )
-
-            elif feat in disc_pos:
-                di = int(disc_pos[feat])
-                if di >= len(categories) or di >= len(cat_slices):
-                    raise ValueError(f"Discrete feature '{feat}' missing category metadata.")
-
-                cats = list(categories[di])
-                domain_cat_indices = self._resolve_category_domain_indices(
-                    feat=feat,
-                    values=vals,
-                    categories=cats,
-                )
-
-                domain_idx = torch.tensor(domain_cat_indices, dtype=torch.long)
-                m = len(cats)
-                dom_onehot = torch.nn.functional.one_hot(domain_idx, num_classes=m).to(torch.float32)
-                self.register_buffer(f"_ag_dom_{gi}", dom_onehot)
-
-                pos_map = torch.full((m,), -1, dtype=torch.long)
-                for p, ci in enumerate(domain_cat_indices):
-                    pos_map[int(ci)] = int(p)
-                self.register_buffer(f"_ag_posmap_{gi}", pos_map)
-
-                (s, e) = cat_slices[di]
-                self.register_buffer(f"_ag_idx_{gi}", torch.arange(int(spec.action_size), dtype=torch.float32))
-                w = self._default_cost_weight(spec.id, feat, "categorical", int(spec.action_size))
-                self._group_meta.append(
-                    {
-                        "id": spec.id,
-                        "feature": feat,
-                        "kind": "categorical",
-                        "slice": (int(s), int(e)),
-                        "action_size": int(spec.action_size),
-                        "num_categories": int(m),
-                        "increase_only": feat in self._inc_only,
-                        "decrease_only": feat in self._dec_only,
-                        "cost_weight": w,
-                        "special_values": [float(v) for v in spec.special_values_for(feat)],
-                    }
-                )
-            else:
-                raise ValueError(
-                    f"Feature '{feat}' (group '{spec.id}') not found in continous_cols or discret_cols."
-                )
-
-            # Resolve derived features for Type 1/2
-            derived_feats = list(spec.derived_features)
-            rule = dict(spec.rule)
-            if derived_feats:
-                derived_indices: List[Dict[str, Any]] = []
-                for df in derived_feats:
-                    if df in cont_pos:
-                        derived_indices.append({
-                            "feature": df,
-                            "kind": "continuous",
-                            "cont_index": int(cont_pos[df]),
-                        })
-                    elif df in disc_pos:
-                        di = int(disc_pos[df])
-                        if di >= len(cat_slices):
-                            raise ValueError(
-                                f"Derived feature '{df}' missing category metadata."
-                            )
-                        (s, e) = cat_slices[di]
-                        derived_indices.append({
-                            "feature": df,
-                            "kind": "categorical",
-                            "slice": (int(s), int(e)),
-                        })
-                    else:
-                        raise ValueError(
-                            f"Derived feature '{df}' (group '{spec.id}') "
-                            f"not found in continous_cols or discret_cols."
-                        )
-                self._group_meta[-1]["derived"] = derived_indices
-                self._group_meta[-1]["rule"] = rule
+        runtime_action_sizes = [int(group.action_size) for group in runtime_groups]
+        if runtime_action_sizes != self._action_sizes:
+            raise RuntimeError(
+                f"Action runtime sizes {runtime_action_sizes} do not match initialized sizes {self._action_sizes}."
+            )
 
         # group composition printout (continuous vs categorical)
         if not self._sanity_logged:
-            n_cont = sum(1 for mm in self._group_meta if mm.get("kind") == "continuous")
-            n_cat = sum(1 for mm in self._group_meta if mm.get("kind") == "categorical")
-            n_t0 = sum(1 for mm in self._group_meta if not mm.get("derived"))
-            n_t12 = sum(1 for mm in self._group_meta if mm.get("derived"))
+            n_cont = sum(1 for group in runtime_groups if group.kind == "continuous")
+            n_cat = sum(1 for group in runtime_groups if group.kind == "categorical")
+            n_t0 = sum(1 for group in runtime_groups if len(group.derived) == 0)
+            n_t12 = sum(1 for group in runtime_groups if len(group.derived) > 0)
             print(
-                f"[DiscreteRecourseNet] Loaded {len(self._group_meta)} groups "
+                f"[DiscreteRecourseNet] Loaded {len(runtime_groups)} groups "
                 f"(type0={n_t0}, type1+2={n_t12}, "
                 f"continuous={n_cont}, categorical={n_cat}) "
                 f"for dataset='{self.dataset_name}'."
             )
-            if n_cat == 0 and len(disc_cols) > 0:
+            if n_cat == 0 and len(self.discret_cols) > 0:
                 print(
                     "[DiscreteRecourseNet][WARN] No categorical groups were loaded even though "
                     "the dataset has discrete columns. Check action_groups.json domains / feature names."
@@ -546,54 +361,16 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         return (opt_1, opt_2)
 
     # Invalid action masking for monotonicity constraints
-    def _mask_invalid_actions(self, gi: int, x: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
+    def _mask_invalid_actions(self, group: ActionProjectionGroup, x: torch.Tensor, logits: torch.Tensor) -> torch.Tensor:
         """Mask infeasible actions for one group before sampling/argmax."""
-        meta = self._group_meta[gi]
-        inc_only = bool(meta.get("increase_only", False))
-        dec_only = bool(meta.get("decrease_only", False))
-        if not (inc_only or dec_only):
+        feasible = action_feasibility_mask(
+            group,
+            x,
+            eps=self._eps,
+            ensure_any=True,
+        )
+        if feasible.numel() == 0:
             return logits
-
-        A = logits.shape[-1]
-        device = logits.device
-
-        if meta["kind"] == "continuous":
-            dom = getattr(self, f"_ag_dom_{gi}")  # (A,)
-            cur = x[:, int(meta["cont_index"])]  # (B,)
-
-            dom_min = dom.min()
-            dom_max = dom.max()
-            in_range = (cur >= (dom_min - self._eps)) & (cur <= (dom_max + self._eps))
-
-            feasible = torch.ones((x.shape[0], A), dtype=torch.bool, device=device)
-            if inc_only:
-                feasible[in_range] = dom.unsqueeze(0) >= (cur[in_range].unsqueeze(1) - self._eps)
-            if dec_only:
-                feasible[in_range] = dom.unsqueeze(0) <= (cur[in_range].unsqueeze(1) + self._eps)
-
-        else:
-            (s, e) = meta["slice"]
-            block = x[:, s:e]
-            cur_cat = block.argmax(dim=1)
-
-            pos_map = getattr(self, f"_ag_posmap_{gi}")  # (m,)
-            cur_pos = pos_map[cur_cat]  # (B,)
-
-            pos = torch.arange(A, device=device).unsqueeze(0).expand(x.shape[0], -1)
-            feasible = torch.ones((x.shape[0], A), dtype=torch.bool, device=device)
-
-            known = cur_pos >= 0
-            if known.any():
-                if inc_only:
-                    feasible[known] = pos[known] >= cur_pos[known].unsqueeze(1)
-                if dec_only:
-                    feasible[known] = pos[known] <= cur_pos[known].unsqueeze(1)
-
-        # ensure at least one feasible action per sample
-        none_ok = ~feasible.any(dim=1)
-        if none_ok.any():
-            feasible[none_ok] = True
-
         return logits.masked_fill(~feasible, self.invalid_logit_value)
 
     @staticmethod
@@ -609,8 +386,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
     def _apply_derived_constraints(
         self,
-        gi: int,
-        meta: Dict[str, Any],
+        group: ActionProjectionGroup,
         x: torch.Tensor,
         c: torch.Tensor,
         c_soft: Optional[torch.Tensor],
@@ -622,21 +398,23 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         Called after the base feature has been written into c and c_soft
         returns updated tensors without mutating them in-place.
         """
-        derived_list = meta.get("derived")
-        rule = meta.get("rule", {})
+        derived_list = list(group.derived)
+        rule = dict(group.rule)
         if not derived_list or not rule:
             return c, c_soft
 
         kind = rule.get("kind", "")
         params = rule.get("params", {})
-        base_meta_kind = meta["kind"]
+        base_meta_kind = group.kind
 
         for d_info in derived_list:
-            d_kind = d_info["kind"]
+            d_kind = d_info.kind
 
             if d_kind == "continuous" and base_meta_kind == "continuous":
-                j_base = int(meta["cont_index"])
-                j_derived = int(d_info["cont_index"])
+                if group.cont_index is None or d_info.cont_index is None:
+                    raise ValueError(f"Derived constraint group '{group.id}' is missing continuous indices.")
+                j_base = int(group.cont_index)
+                j_derived = int(d_info.cont_index)
 
                 x_base = x[:, j_base : j_base + 1]
                 x_derived = x[:, j_derived : j_derived + 1]
@@ -669,7 +447,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 raise NotImplementedError(
                     f"Derived constraint not implemented for "
                     f"base kind={base_meta_kind}, derived kind={d_kind} "
-                    f"(group '{meta.get('id', '?')}', rule kind='{kind}')."
+                    f"(group '{group.id}', rule kind='{kind}')."
                 )
 
         return c, c_soft
@@ -688,7 +466,9 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
     def model_forward(self, x):
         """x is already preprocessed (scaled + one-hot)."""
         if not self._domains_built:
-            self._ensure_action_domains()
+            self._ensure_action_runtime()
+        if self._action_runtime is None:
+            raise RuntimeError("Action runtime has not been prepared.")
 
         z = self.encoder_model(x)
         pred = self.predictor(z)
@@ -721,10 +501,15 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         # Expected action cost (differentiable) for training-time proximity
         total_cost = torch.zeros((B,), device=x.device) if self.training else None
 
-        for gi, meta in enumerate(self._group_meta):
+        runtime_groups = self._action_runtime.groups
+        scaler_min = float(self._action_runtime.scaler_min)
+        scaler_max = float(self._action_runtime.scaler_max)
+        denom = float(scaler_max - scaler_min) if float(scaler_max - scaler_min) != 0.0 else 1.0
+
+        for gi, group in enumerate(runtime_groups):
             a0, a1 = self._action_offsets[gi]
             logits = choice_logits_all[:, a0:a1]
-            logits = self._mask_invalid_actions(gi, x, logits)
+            logits = self._mask_invalid_actions(group, x, logits)
 
             if self.training:
                 a_onehot = torch.nn.functional.gumbel_softmax(
@@ -741,28 +526,31 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
             # accumulate expected cost
             if self.training and a_soft is not None and total_cost is not None:
-                w = float(meta.get("cost_weight", 1.0))
+                w = float(self._group_cost_weights[gi])
                 apply_p = apply_soft[:, gi]  # (B,)
-                if meta["kind"] == "continuous":
+                if group.kind == "continuous":
                     # expected step distance from current value (sentinels treated as OOD)
-                    j_cur = int(meta["cont_index"])
-                    denom = (self.scaler.max_ - self.scaler.min_)
-                    raw_cur = x[:, j_cur] * denom + self.scaler.min_
-                    step = float(meta.get("raw_step", 1.0)) or 1.0
-                    v0 = float(meta.get("raw_v0", 0.0))
+                    if group.cont_index is None:
+                        raise ValueError(f"Continuous group '{group.id}' is missing cont_index.")
+                    j_cur = int(group.cont_index)
+                    raw_cur = x[:, j_cur] * float(denom) + float(scaler_min)
+                    step = float(group.raw_step or 1.0) or 1.0
+                    v0 = float(group.raw_v0 or 0.0)
                     idx_cur = torch.round((raw_cur - v0) / step)
-                    A = int(meta["action_size"])
+                    A = int(group.action_size)
                     idx_cur = torch.clamp(idx_cur, 0.0, float(A - 1))
                     # sentinel: virtual index -1 (adds +1 step to all valid moves)
-                    for sv in (meta.get("special_values") or []):
+                    for sv in (group.special_values or []):
                         sv_t = torch.tensor(float(sv), device=raw_cur.device, dtype=raw_cur.dtype)
                         idx_cur = torch.where(raw_cur == sv_t, torch.full_like(idx_cur, -1.0), idx_cur)
-                    idx = getattr(self, f"_ag_idx_{gi}")  # (A,)
+                    idx = torch.arange(A, device=x.device, dtype=apply_p.dtype)
                     mag = (a_soft * torch.abs(idx.unsqueeze(0) - idx_cur.unsqueeze(1))).sum(dim=1)
                 else:
-                    (s, e) = meta["slice"]
+                    if group.slice is None:
+                        raise ValueError(f"Categorical group '{group.id}' is missing slice.")
+                    (s, e) = group.slice
                     cur_cat = x[:, s:e].argmax(dim=1)
-                    pos_map = getattr(self, f"_ag_posmap_{gi}")
+                    pos_map = group.pos_map.to(device=x.device)
                     cur_pos = pos_map[cur_cat]
                     p_cur = torch.zeros((B,), device=x.device, dtype=apply_p.dtype)
                     known = cur_pos >= 0
@@ -770,10 +558,12 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                         p_cur[known] = a_soft[known, cur_pos[known]]
                     mag = 1.0 - p_cur
                 total_cost = total_cost + (w * apply_p * (self.action_cost_base + mag))
-            if meta["kind"] == "continuous":
-                dom = getattr(self, f"_ag_dom_{gi}")  # (A,)
+            if group.kind == "continuous":
+                if group.cont_index is None:
+                    raise ValueError(f"Continuous group '{group.id}' is missing cont_index.")
+                dom = group.scaled_domain.to(device=x.device, dtype=x.dtype)  # (A,)
                 target = a_onehot @ dom.unsqueeze(1)  # (B,1)
-                j = int(meta["cont_index"])
+                j = int(group.cont_index)
                 c = self._replace_feature_slice(
                     c,
                     j,
@@ -789,9 +579,11 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                         a_apply_soft * target_soft + (1.0 - a_apply_soft) * x[:, j : j + 1],
                     )
             else:
-                dom_onehot = getattr(self, f"_ag_dom_{gi}")  # (A,m)
+                if group.slice is None:
+                    raise ValueError(f"Categorical group '{group.id}' is missing slice.")
+                dom_onehot = group.scaled_domain.to(device=x.device, dtype=x.dtype)  # (A,m)
                 target_block = a_onehot @ dom_onehot  # (B,m)
-                (s, e) = meta["slice"]
+                (s, e) = group.slice
                 c = self._replace_feature_slice(
                     c,
                     s,
@@ -808,9 +600,9 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                     )
 
             # Type 1/2: apply derived constraints
-            if meta.get("derived"):
+            if group.derived:
                 c, c_soft = self._apply_derived_constraints(
-                    gi, meta, x, c, c_soft, a_apply, a_apply_soft
+                    group, x, c, c_soft, a_apply, a_apply_soft
                 )
 
         if self.training:
