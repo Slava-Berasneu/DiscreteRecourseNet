@@ -80,9 +80,7 @@ IMMUTABLE_CONSTRAINTS = {
 }
 
 # Force a feature to be interpreted as the given kind
-FORCE_ORDINAL_FEATURES = {
-    "student": ["studied_credits"],
-}
+FORCE_ORDINAL_FEATURES = {}
 
 FORCE_CATEGORICAL_FEATURES = {
     "adult": ["education"],

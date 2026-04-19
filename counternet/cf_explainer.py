@@ -57,24 +57,35 @@ class VanillaCF(LocalExplainerBase):
         return 1.0 * l_1 + 0.5 * l_2
 
     def generate_cf(self, x: torch.Tensor):
-        cf = nn.Parameter(x.clone(), requires_grad=True)
-        optim = torch.optim.RMSprop([cf], lr=0.001)
+        with torch.no_grad():
+            y_pred = self.pred_fn(x).reshape(-1)
+            neg_mask = torch.round(y_pred) == 0
 
-        for _ in range(self.steps):
-            c = cf if self.cat_normalizer is None else self.cat_normalizer.normalize(cf)
-            y_pred = self.pred_fn(x)
-            y_prime = flip_binary(y_pred)
-            c_y = self.pred_fn(c)
+        # Positive predictions are treated as no-op recourse cases for fairer
+        # comparison with models that only optimize recourse for negatives.
+        out = x.clone()
 
-            l_1 = F.binary_cross_entropy(c_y, y_prime)
-            l_2 = F.mse_loss(x, c)
-            loss = 1.0 * l_1 + 0.5 * l_2
+        if neg_mask.any():
+            x_neg = x[neg_mask]
+            y_prime = flip_binary(y_pred[neg_mask])
 
-            optim.zero_grad()
-            loss.backward()
-            optim.step()
+            cf = nn.Parameter(x_neg.clone(), requires_grad=True)
+            optim = torch.optim.RMSprop([cf], lr=0.001)
 
-        out = cf.detach().clone()
+            for _ in range(self.steps):
+                c = cf if self.cat_normalizer is None else self.cat_normalizer.normalize(cf)
+                c_y = self.pred_fn(c)
+
+                l_1 = F.binary_cross_entropy(c_y, y_prime)
+                l_2 = F.mse_loss(x_neg, c)
+                loss = 1.0 * l_1 + 0.5 * l_2
+
+                optim.zero_grad()
+                loss.backward()
+                optim.step()
+
+            out[neg_mask] = cf.detach().clone()
+
         return out if self.cat_normalizer is None else self.cat_normalizer.normalize(out, hard=True)
 
 

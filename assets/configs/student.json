@@ -11,6 +11,7 @@
                            "num_of_prev_attempts",
                            "weight",
                            "weighted_score",
+                           "studied_credits",
                            "forumng_click",
                            "homepage_click",
                            "oucontent_click",
@@ -39,11 +40,10 @@
                          "highest_education",
                          "imd_band",
                          "age_band",
-                         "studied_credits",
                          "disability"
                      ],
     "encoder_dims":  [
-                         127,
+                         67,
                          100,
                          10
                      ],

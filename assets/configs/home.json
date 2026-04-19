@@ -4,11 +4,8 @@
     "lr":  0.005,
     "batch_size":  128,
     "lambda_1":  1.0,
-    "lambda_2":  0.02,
-    "gumbel_tau_mask":  0.5,
-    "gumbel_tau_choice":  0.75,
-    "action_cost_base":  0.005,
-    "lambda_3":  1.0,
+    "lambda_2":  0.1,
+    "lambda_3":  0.5,
     "threshold":  1,
     "continous_cols":  [
                            "ExternalRiskEstimate",

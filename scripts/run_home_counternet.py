@@ -42,28 +42,33 @@ MODELS_TO_RUN: List[str] = [
     "discrete_recoursenet",
     "counternet_projection",
     "counternet",
+    "vanillacf"
 ]
 
 # Comparison-mode per-model settings
 # These are ignored in shared mode and all models use the same config.
 MODEL_RUN_SETTINGS: Dict[str, Dict[str, Any]] = {
     "discrete_recoursenet": {
-         "ablation": "cfgen_flip_neg_stay_pos"
+         "ablation": "cfgen_flip_neg_stay_pos",
+         "overrides": {
+            "lambda_1":  1.0,
+            "lambda_2":  0.02,
+            "gumbel_tau_mask":  0.5,
+            "gumbel_tau_choice":  0.75,
+            "action_cost_base":  0.005,
+            "lambda_3":  1.0,
+         }
+
     },
     "counternet_projection": {
-        "overrides": {
-            "lambda_2": 0.1,
-            "lambda_3": 0.5,
-        },
+        "ablation": "cfgen_flip_neg_stay_pos"
         # "ablation": "cfgen_flip_neg_stay_pos",
     },
     "counternet": {
-        "overrides": {
-            "lambda_2": 0.1,
-            "lambda_3": 0.5,
-        },
+        "ablation": "cfgen_flip_neg_stay_pos"
         # "ablation": "cfgen_flip_neg_stay_pos",
     },
+    "vanillacf": {}
 }
 
 MODEL_REGISTRY = {
