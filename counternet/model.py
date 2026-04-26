@@ -106,8 +106,10 @@ class CounterNetModel(CFNetTrainingModule):
         # Separate optimizers to avoid explainer loss affecting predictor weights.
         pred_params = list(self.encoder_model.parameters()) + list(self.predictor.parameters()) + list(self.pred_linear.parameters())
         exp_params = list(self.explainer.parameters())
-        opt_1 = torch.optim.Adam(pred_params, lr=self.lr)
-        opt_2 = torch.optim.Adam(exp_params, lr=self.lr)
+        pred_lr = float(self.hparams.get("predictor_lr", self.lr))
+        cf_lr = float(self.hparams.get("cf_lr", self.lr))
+        opt_1 = torch.optim.Adam(pred_params, lr=pred_lr)
+        opt_2 = torch.optim.Adam(exp_params, lr=cf_lr)
         return (opt_1, opt_2)
 
 
@@ -119,6 +121,7 @@ class CounterNetProjectionModel(CounterNetModel):
         self.dataset_name: str = str(config.get("dataset_name", ""))
         if not self.dataset_name:
             raise ValueError("CounterNetProjectionModel requires 'dataset_name' in the model config.")
+        self._eps: float = float(config.get("mask_eps", 1e-7))
 
         default_action_groups_path = Path(__file__).resolve().parents[1] / "assets" / "actions" / "action_groups.json"
         self.action_groups_path = Path(config.get("action_groups_path", default_action_groups_path))
@@ -149,7 +152,7 @@ class CounterNetProjectionModel(CounterNetModel):
                 0.0,
                 1.0,
             )
-        return project_to_actionable(x, cf_soft, self._action_projection_spec)
+        return project_to_actionable(x, cf_soft, self._action_projection_spec, eps=self._eps)
 
 
 class DiscreteRecourseNetModel(CFNetTrainingModule):
@@ -160,13 +163,15 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
     Currently implemented:
       - Type 0 (singleton) action groups
       - Type 1/2 (base + derived) action groups
+      - Type 4 (joint latent-shift) action groups
 
     Expected action_groups.json schema:
       action_groups[dataset][group_id] = {
-        "type": 0|1|2,
+        "type": 0|1|2|4,
         "features": ["feature_name", ...],
         "mutable": true/false,
-        "action_domain": {"kind": "values"|"noop", "feature": "...", "values": [...]},
+        "action_domain": {"kind": "values"|"noop", "feature": "...", "values": [...]} |
+                         {"kind": "delta_steps", "deltas": [...], "scales": {...}, "domains": {...}},
         "roles": {"base": [...], "derived": [...]},   # type 1/2 only
         "rule": {"kind": "...", "params": {...}},      # type 1/2 only
       }
@@ -179,6 +184,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
       - This model maps those domains into the preprocessed input space using the fitted MinMaxScaler and OneHotEncoder
         categories stored in CategoricalNormalizer.
       - Type 1/2 groups act on the base feature only, derived features are updated using _apply_derived_constraints.
+      - Type 4 groups act on all listed continuous features using one shared discrete delta.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -195,7 +201,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         self.gumbel_tau_choice: float = float(config.get("gumbel_tau_choice"))
         self.mask_threshold: float = float(config.get("mask_threshold", 0.5))
         self.invalid_logit_value: float = float(config.get("invalid_logit_value", -1e4))
-        self._eps: float = float(config.get("mask_eps", 1e-6))
+        self._eps: float = float(config.get("mask_eps", 1e-7))
 
         # Load action groups from action_groups.json (raw feature-space domains).
         self.dataset_name: str = str(config.get("dataset_name", ""))
@@ -258,12 +264,15 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         self._inc_only = set(inc_only)
         self._dec_only = set(dec_only)
 
-    def _default_cost_weight(self, gid: str, feat: str, kind: str, action_size: int) -> float:
+    def _default_cost_weight(self, gid: str, feat: str, kind: str, action_size: int, action_kind: str) -> float:
         # can be overridden by config
         if gid in self.action_cost_weights:
             return float(self.action_cost_weights[gid])
         if feat in self.action_cost_weights:
             return float(self.action_cost_weights[feat])
+
+        if action_kind == "delta_steps":
+            return 1.0
 
         # normalize continuous domains by number of discrete steps
         if kind == "continuous":
@@ -297,6 +306,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 str(group.base_feature),
                 group.kind,
                 int(group.action_size),
+                str(group.action_kind),
             )
             for group in runtime_groups
         ]
@@ -316,11 +326,12 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         if not self._sanity_logged:
             n_cont = sum(1 for group in runtime_groups if group.kind == "continuous")
             n_cat = sum(1 for group in runtime_groups if group.kind == "categorical")
-            n_t0 = sum(1 for group in runtime_groups if len(group.derived) == 0)
-            n_t12 = sum(1 for group in runtime_groups if len(group.derived) > 0)
+            n_t0 = sum(1 for group in runtime_groups if int(group.type) == 0)
+            n_t12 = sum(1 for group in runtime_groups if int(group.type) in (1, 2))
+            n_t4 = sum(1 for group in runtime_groups if int(group.type) == 4)
             print(
                 f"[DiscreteRecourseNet] Loaded {len(runtime_groups)} groups "
-                f"(type0={n_t0}, type1+2={n_t12}, "
+                f"(type0={n_t0}, type1+2={n_t12}, type4={n_t4}, "
                 f"continuous={n_cont}, categorical={n_cat}) "
                 f"for dataset='{self.dataset_name}'."
             )
@@ -356,8 +367,10 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
         # Separate optimizers: predictor vs discrete policy (mask+choice)
         pred_params = list(self.encoder_model.parameters()) + list(self.predictor.parameters()) + list(self.pred_linear.parameters())
         policy_params = list(self.mask_head.parameters()) + list(self.choice_head.parameters())
-        opt_1 = torch.optim.Adam(pred_params, lr=self.lr)
-        opt_2 = torch.optim.Adam(policy_params, lr=self.lr)
+        pred_lr = float(self.hparams.get("predictor_lr", self.lr))
+        cf_lr = float(self.hparams.get("cf_lr", self.lr))
+        opt_1 = torch.optim.Adam(pred_params, lr=pred_lr)
+        opt_2 = torch.optim.Adam(policy_params, lr=cf_lr)
         return (opt_1, opt_2)
 
     # Invalid action masking for monotonicity constraints
@@ -528,7 +541,10 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             if self.training and a_soft is not None and total_cost is not None:
                 w = float(self._group_cost_weights[gi])
                 apply_p = apply_soft[:, gi]  # (B,)
-                if group.kind == "continuous":
+                if group.action_kind == "delta_steps":
+                    delta_mag = group.delta_domain.to(device=x.device, dtype=apply_p.dtype).abs()
+                    mag = (a_soft * delta_mag.unsqueeze(0)).sum(dim=1)
+                elif group.kind == "continuous":
                     # expected step distance from current value (sentinels treated as OOD)
                     if group.cont_index is None:
                         raise ValueError(f"Continuous group '{group.id}' is missing cont_index.")
@@ -558,7 +574,34 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                         p_cur[known] = a_soft[known, cur_pos[known]]
                     mag = 1.0 - p_cur
                 total_cost = total_cost + (w * apply_p * (self.action_cost_base + mag))
-            if group.kind == "continuous":
+            if group.action_kind == "delta_steps":
+                if not group.cont_indices:
+                    raise ValueError(f"Type 4 group '{group.id}' is missing cont_indices.")
+                shift = a_onehot @ group.scaled_shifts.to(device=x.device, dtype=x.dtype)  # (B,F)
+                x_block = torch.stack([x[:, idx] for idx in group.cont_indices], dim=1)
+                target_block = x_block + shift
+                updated_block = a_apply * target_block + (1.0 - a_apply) * x_block
+                for pos, j in enumerate(group.cont_indices):
+                    c = self._replace_feature_slice(
+                        c,
+                        j,
+                        j + 1,
+                        updated_block[:, pos : pos + 1],
+                    )
+
+                if self.training and c_soft is not None and a_soft is not None:
+                    shift_soft = a_soft @ group.scaled_shifts.to(device=x.device, dtype=x.dtype)
+                    target_block_soft = x_block + shift_soft
+                    updated_block_soft = a_apply_soft * target_block_soft + (1.0 - a_apply_soft) * x_block
+                    for pos, j in enumerate(group.cont_indices):
+                        c_soft = self._replace_feature_slice(
+                            c_soft,
+                            j,
+                            j + 1,
+                            updated_block_soft[:, pos : pos + 1],
+                        )
+
+            elif group.kind == "continuous":
                 if group.cont_index is None:
                     raise ValueError(f"Continuous group '{group.id}' is missing cont_index.")
                 dom = group.scaled_domain.to(device=x.device, dtype=x.dtype)  # (A,)

@@ -39,7 +39,7 @@ Action domains (finite):
 - kind="noop"        : {"kind":"noop","values":[0]} (immutable)
 - kind="values"      : {"kind":"values","feature":"f","values":[...]} (single head)
 - kind="cartesian"   : {"kind":"cartesian","features":[...],"domains":{f:[...],...}} (multi-head)
-- kind="delta_steps" : {"kind":"delta_steps","deltas":[...],"scales":{f:s,...}} (Type 4)
+- kind="delta_steps" : {"kind":"delta_steps","deltas":[...],"scales":{f:s,...},"domains":{f:[...],...}} (Type 4)
 - kind="choice"      : {"kind":"choice","values":[1..m],"mapping":{...}} (Type 5)
 """
 
@@ -130,13 +130,28 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
                 "kind": "clip_derived_to_base",
                 "params": {"base": "NumTrades60Ever2DerogPubRec"},
             },
+        },
+        {
+            "id": "Pay_Down_Revolving_Debt",
+            "type": 4,
+            "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
+            "delta_domain": [0, 1, 2, 3],
+            "rule": {"kind": "latent_shift", "params": {}},
         }],
-    "student": [],
+    "student": [
+        {
+            "id": "Increase_Online_Participation",
+            "type": 4,
+            "features": ["forumng_click", "homepage_click", "subpage_click", "resource_click", "url_click", "oucontent_click"],
+            "delta_domain": [0, 1, 2, 3],
+            "rule": {"kind": "latent_shift", "params": {}},
+        }
+    ],
     "credit_card": []
 }
 
 # Default delta domain for Type 4 groups
-DEFAULT_TYPE4_DELTA_DOMAIN: List[int] = [-3, -2, -1, 0, 1, 2, 3]
+DEFAULT_TYPE4_DELTA_DOMAIN: List[int] = [0, 1, 2, 3]
 
 DEFAULT_MAX_VALUE_LIST_SIZE = 20000
 DEFAULT_LIST_WRAP = 20
@@ -341,6 +356,54 @@ def _type4_scales(features_meta: Dict[str, Dict[str, Any]], feats: Sequence[str]
     return scales
 
 
+def _type4_domains(
+    features_meta: Dict[str, Dict[str, Any]],
+    feats: Sequence[str],
+    max_size: int,
+) -> Dict[str, List[Any]]:
+    domains: Dict[str, List[Any]] = {}
+    for f in feats:
+        vals, _ = _feature_action_values(features_meta[f], max_size=max_size)
+        if not vals:
+            raise ValueError(f"Type 4 feature '{f}' has empty actionable domain.")
+        domains[f] = list(vals)
+    return domains
+
+
+def _type4_loadings(
+    feats: Sequence[str],
+    spec: Dict[str, Any],
+    *,
+    increase_only: Sequence[str],
+    decrease_only: Sequence[str],
+) -> Dict[str, float]:
+    params = dict(spec.get("rule", {}).get("params", {}) or {})
+    explicit = params.get("loadings", {})
+    if explicit:
+        if not isinstance(explicit, dict):
+            raise ValueError(f"Type 4 loadings must be a mapping, got {explicit!r}")
+        out = {str(k): float(v) for k, v in explicit.items()}
+        missing = [f for f in feats if f not in out]
+        extra = [k for k in out.keys() if k not in feats]
+        if missing:
+            raise ValueError(f"Type 4 group is missing loadings for features {missing}")
+        if extra:
+            raise ValueError(f"Type 4 group defines loadings for unknown features {extra}")
+        return {f: out[f] for f in feats}
+
+    inc = set(str(v) for v in increase_only)
+    dec = set(str(v) for v in decrease_only)
+    if feats and all(f in inc for f in feats):
+        return {f: 1.0 for f in feats}
+    if feats and all(f in dec for f in feats):
+        return {f: -1.0 for f in feats}
+
+    raise ValueError(
+        "Type 4 group requires explicit rule.params.loadings unless all features are "
+        "uniformly increase_only or uniformly decrease_only."
+    )
+
+
 def _is_scalar(x: Any) -> bool:
     return not isinstance(x, (dict, list))
 
@@ -435,6 +498,7 @@ def compile_groups_for_dataset(
     dataset: str,
     features_meta: Dict[str, Dict[str, Any]],
     group_specs: Sequence[Dict[str, Any]],
+    monotonicity: Dict[str, List[str]],
     max_value_list_size: int,
 ) -> Dict[str, Dict[str, Any]]:
     """Build groups for one dataset.
@@ -445,6 +509,8 @@ def compile_groups_for_dataset(
 
     groups: Dict[str, Dict[str, Any]] = {}
     used: set[str] = set()
+    inc_only = list(monotonicity.get("increase_only", []))
+    dec_only = list(monotonicity.get("decrease_only", []))
 
     def add_group(group_id: str, obj: Dict[str, Any]) -> None:
         if group_id in groups:
@@ -530,8 +596,22 @@ def compile_groups_for_dataset(
                 delta_domain = list(spec.get("delta_domain", DEFAULT_TYPE4_DELTA_DOMAIN))
                 if not all(isinstance(d, int) for d in delta_domain):
                     raise ValueError(f"Type 4 delta_domain must be integers (delta steps), got {delta_domain}")
+                if 0 not in delta_domain:
+                    raise ValueError(f"Type 4 delta_domain must include 0, got {delta_domain}")
                 scales = _type4_scales(features_meta, feats)
-                action_domain = {"kind": "delta_steps", "deltas": delta_domain, "scales": scales}
+                domains = _type4_domains(features_meta, feats, max_size=max_value_list_size)
+                loadings = _type4_loadings(
+                    feats,
+                    spec,
+                    increase_only=inc_only,
+                    decrease_only=dec_only,
+                )
+                action_domain = {
+                    "kind": "delta_steps",
+                    "deltas": delta_domain,
+                    "scales": scales,
+                    "domains": domains,
+                }
 
             elif gtype == 5:
                 m = len(feats)
@@ -569,7 +649,12 @@ def compile_groups_for_dataset(
             group_obj["roles"] = roles
 
         if "rule" in spec and spec["rule"] is not None:
-            group_obj["rule"] = spec["rule"]
+            rule_payload = dict(spec["rule"])
+            if gtype == 4:
+                params = dict(rule_payload.get("params", {}) or {})
+                params["loadings"] = loadings
+                rule_payload["params"] = params
+            group_obj["rule"] = rule_payload
 
         add_group(gid, group_obj)
 
@@ -608,14 +693,14 @@ def generate_action_groups(
 
     for dataset, feats_meta in feature_metadata.items():
         specs = GROUP_SPECS.get(dataset, [])
+        ds_mono = _filter_monotonicity_for_dataset(dataset, feats_meta, monotonicity)
         groups = compile_groups_for_dataset(
             dataset=dataset,
             features_meta=feats_meta,
             group_specs=specs,
+            monotonicity=ds_mono,
             max_value_list_size=max_value_list_size,
         )
-
-        ds_mono = _filter_monotonicity_for_dataset(dataset, feats_meta, monotonicity)
 
         # constraints reserved key
         ds_out: Dict[str, Any] = {"__constraints__": {"monotonicity": ds_mono}}

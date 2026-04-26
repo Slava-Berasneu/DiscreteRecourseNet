@@ -27,6 +27,16 @@ class BaseModule(pl.LightningModule, ABCBaseModule):
         self.lambda_3 = configs['lambda_3'] if 'lambda_3' in configs.keys() else 1
         self.threshold = configs['threshold'] if 'threshold' in configs.keys() else 1
         self.smooth_y = configs['smooth_y'] if 'smooth_y' in configs.keys() else True
+        self.prediction_threshold_mode = str(configs.get('prediction_threshold_mode', 'round'))
+        self.prediction_threshold = float(configs.get('prediction_threshold', 0.5))
+        self._resolved_prediction_threshold: Optional[float] = None
+
+        supported_threshold_modes = {'round', 'fixed', 'auto_val_balanced_accuracy'}
+        if self.prediction_threshold_mode not in supported_threshold_modes:
+            raise ValueError(
+                f"Unsupported prediction_threshold_mode '{self.prediction_threshold_mode}'. "
+                f"Expected one of {sorted(supported_threshold_modes)}."
+            )
 
         # loss functions
         self.loss_func_1 = get_loss_functions(configs['loss_1']) if 'loss_1' in configs.keys() else get_loss_functions("mse")
@@ -76,7 +86,12 @@ class BaseModule(pl.LightningModule, ABCBaseModule):
 
         # init sensitivity metric
         self.sensitivity = SensitivityMetric(
-            predict_fn=self.predict, scaler=self.scaler, cat_idx=len(self.continous_cols), threshold=self.threshold)
+            predict_fn=self.predict,
+            scaler=self.scaler,
+            cat_idx=len(self.continous_cols),
+            threshold=self.threshold,
+            label_fn=self.binarize_prediction_scores,
+        )
 
         print(f"x_cont: {X_cont.size()}, x_cat: {X_cat.size()}, X shape: {X.size()}")
 
@@ -101,6 +116,73 @@ class BaseModule(pl.LightningModule, ABCBaseModule):
         return DataLoader(self.test_dataset, batch_size=self.batch_size,
                           pin_memory=True, shuffle=False, num_workers=0)
 
+    def current_prediction_threshold(self) -> float:
+        if self.prediction_threshold_mode == 'round':
+            return float(self.prediction_threshold)
+        if self._resolved_prediction_threshold is not None:
+            return float(self._resolved_prediction_threshold)
+        return float(self.prediction_threshold)
+
+    def binarize_prediction_scores(self, scores: torch.Tensor) -> torch.Tensor:
+        return binarize_binary(
+            scores,
+            threshold=self.current_prediction_threshold(),
+            mode=self.prediction_threshold_mode,
+        )
+
+    def flip_prediction_scores(self, scores: torch.Tensor) -> torch.Tensor:
+        return flip_binary(
+            scores,
+            threshold=self.current_prediction_threshold(),
+            mode=self.prediction_threshold_mode,
+        )
+
+    def resolve_prediction_threshold(self, force: bool = False) -> Optional[float]:
+        if self.prediction_threshold_mode == 'round':
+            self._resolved_prediction_threshold = None
+            return None
+
+        if self.prediction_threshold_mode == 'fixed':
+            self._resolved_prediction_threshold = float(self.prediction_threshold)
+            return float(self._resolved_prediction_threshold)
+
+        if (not force) and (self._resolved_prediction_threshold is not None):
+            return float(self._resolved_prediction_threshold)
+
+        if not hasattr(self, 'val_dataset'):
+            raise RuntimeError("Validation dataset is not prepared. Call prepare_data() before resolving thresholds.")
+
+        param = next(self.parameters(), None)
+        device = param.device if param is not None else torch.device("cpu")
+        was_training = self.training
+        self.eval()
+
+        scores: List[torch.Tensor] = []
+        targets: List[torch.Tensor] = []
+        loader = self.val_dataloader()
+
+        with torch.no_grad():
+            for batch in loader:
+                x, y = batch
+                x = x.to(device)
+                scores.append(self.predict_proba(x).detach().cpu())
+                targets.append(y.detach().cpu())
+
+        if was_training:
+            self.train()
+
+        if scores:
+            threshold = select_balanced_accuracy_threshold(
+                torch.cat(scores, dim=0),
+                torch.cat(targets, dim=0),
+                default=self.prediction_threshold,
+            )
+        else:
+            threshold = float(self.prediction_threshold)
+
+        self._resolved_prediction_threshold = float(threshold)
+        return float(self._resolved_prediction_threshold)
+
 
 class PredictiveTrainingModule(BaseModule):
     def __init__(self, configs: Dict[str, Any]):
@@ -111,12 +193,16 @@ class PredictiveTrainingModule(BaseModule):
     def forward(self, *x):
         return self.model_forward(x)
 
+    def predict_proba(self, x):
+        return self(x)
+
     def predict(self, x):
-        y_hat = self(x)
-        return torch.round(y_hat)
+        y_hat = self.predict_proba(x)
+        return self.binarize_prediction_scores(y_hat)
 
     def configure_optimizers(self):
-        return torch.optim.Adam([p for p in self.parameters() if p.requires_grad], lr=self.lr)
+        pred_lr = float(self.hparams.get('predictor_lr', self.lr))
+        return torch.optim.Adam([p for p in self.parameters() if p.requires_grad], lr=pred_lr)
 
     def training_step(self, batch, batch_idx):
         # batch
@@ -213,10 +299,14 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         c = self.cat_normalizer.normalize(c, hard=hard)
         return y, c
 
+    def predict_proba(self, x):
+        y_hat, _ = self.model_forward(x)
+        return y_hat
+
     def predict(self, x):
         """x has not been preprocessed"""
-        y_hat, _ = self.model_forward(x)
-        return torch.round(y_hat)
+        y_hat = self.predict_proba(x)
+        return self.binarize_prediction_scores(y_hat)
 
     def generate_cf(self, x, clamp=False):
         self.freeze()
@@ -238,7 +328,7 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         y_prime_mode: 'label' or 'predicted'
         """
         if y_prime is None:
-            y_prime = flip_binary(y_hat)
+            y_prime = self.flip_prediction_scores(y_hat)
 
         # Predict label for c
         if hasattr(self, "predict_proba") and callable(getattr(self, "predict_proba")):
@@ -271,8 +361,10 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         return l_1, l_2, l_3
 
     def configure_optimizers(self):
-        opt_1 = torch.optim.Adam([p for p in self.parameters() if p.requires_grad], lr=self.lr)
-        opt_2 = torch.optim.Adam([p for p in self.parameters() if p.requires_grad], lr=self.lr)
+        pred_lr = float(self.hparams.get('predictor_lr', self.lr))
+        cf_lr = float(self.hparams.get('cf_lr', self.lr))
+        opt_1 = torch.optim.Adam([p for p in self.parameters() if p.requires_grad], lr=pred_lr)
+        opt_2 = torch.optim.Adam([p for p in self.parameters() if p.requires_grad], lr=cf_lr)
         return (opt_1, opt_2)
 
     def predictor_step(self, l_1, l_3):
@@ -448,7 +540,7 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
         else:
             # flip predicted label
             l_1, l_2, l_3 = self._loss_functions(x, c, y, y_hat, is_val=True)
-            cf_target = flip_binary(y_hat)
+            cf_target = self.flip_prediction_scores(y_hat)
 
         loss = self.lambda_1 * l_1 + self.lambda_2 * l_2 + self.lambda_3 * l_3
 
@@ -461,7 +553,7 @@ class CFNetTrainingModule(BaseModule, GlobalExplainerBase):
             'val/pred_accuracy': accuracy(y_hat, y.int()),
             'val/cf_proximity': proximity(x, c),
             'val/sensitivity': self.sensitivity(x, c, c_y),
-            'val/cf_accuracy': accuracy(torch.round(c_y), cf_target.int()),
+            'val/cf_accuracy': accuracy(self.binarize_prediction_scores(c_y), cf_target.int()),
         }
         self.log_dict(metrics, on_step=False, on_epoch=True, sync_dist=True)
         return loss

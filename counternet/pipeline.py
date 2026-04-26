@@ -325,6 +325,12 @@ class CFGeneratorBase(ABC):
         self.configs = configs
         self.pred_model = pred_model
         self.ref_model = ref_model if ref_model is not None else pred_model
+
+        for model in (self.pred_model, self.ref_model):
+            resolver = getattr(model, "resolve_prediction_threshold", None)
+            if callable(resolver):
+                resolver()
+
         self.pred_model.freeze()
 
         self.cf_algo = cf_algo
@@ -354,7 +360,7 @@ class CFGeneratorBase(ABC):
     def _target_cf_labels(self, y_hat: torch.Tensor) -> torch.Tensor:
         if self.configs.get("cf_target_filter") == "flip_neg_stay_pos":
             return torch.ones_like(y_hat)
-        return flip_binary(y_hat)
+        return (torch.ones_like(y_hat) - y_hat).clone().detach()
 
     def _finalize_results(
         self,
@@ -444,7 +450,20 @@ class LocalCFGenerator(CFGeneratorBase):
         CFExplainer = type(cf_algo)
         pred_fn = pred_model.forward
         cat_normalizer = pred_model.cat_normalizer
-        self.cf_algo = CFExplainer(pred_fn, cat_normalizer, configs)
+        local_configs = dict(configs or {})
+        current_threshold = None
+        threshold_getter = getattr(pred_model, "current_prediction_threshold", None)
+        if callable(threshold_getter):
+            current_threshold = float(threshold_getter())
+        local_configs.setdefault(
+            "prediction_threshold_mode",
+            getattr(pred_model, "prediction_threshold_mode", local_configs.get("prediction_threshold_mode", "round")),
+        )
+        if current_threshold is not None:
+            local_configs["prediction_threshold"] = current_threshold
+            local_configs["resolved_prediction_threshold"] = current_threshold
+
+        self.cf_algo = CFExplainer(pred_fn, cat_normalizer, local_configs)
 
         self.is_parallel = configs['is_parallel'] if 'is_parallel' in configs else True
 

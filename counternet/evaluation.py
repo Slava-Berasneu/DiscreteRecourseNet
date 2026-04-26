@@ -5,12 +5,20 @@ from .import_essentials import *
 from .utils import *
 
 class SensitivityMetric(Metric):
-    def __init__(self, predict_fn: Callable, scaler: ABCScaler, cat_idx: int, threshold: float):
+    def __init__(
+        self,
+        predict_fn: Callable,
+        scaler: ABCScaler,
+        cat_idx: int,
+        threshold: float,
+        label_fn: Optional[Callable] = None,
+    ):
         super().__init__(dist_sync_on_step=False)
         self.predict_fn = predict_fn
         self.scaler = scaler
         self.cat_idx = cat_idx
         self.threshold = threshold
+        self.label_fn = label_fn
 
         self.add_state("total_n_changes", default=torch.tensor(0), dist_reduce_fx="sum")
         self.add_state("diffs", default=torch.tensor(0), dist_reduce_fx="sum")
@@ -34,8 +42,9 @@ class SensitivityMetric(Metric):
         c_local[:, :self.cat_idx] = self.scaler.transform(c_cont_hat)
 
         c_y_hat = self.predict_fn(c_local)
+        c_y_target = self.label_fn(c_y) if self.label_fn is not None else torch.round(c_y)
 
-        self.diffs += (torch.round(c_y[mask]) != torch.round(c_y_hat[mask])).sum()
+        self.diffs += (c_y_target[mask].int() != c_y_hat[mask].int()).sum()
 
 
     def compute(self):

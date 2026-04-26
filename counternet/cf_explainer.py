@@ -2,7 +2,7 @@ __all__ = ['Clamp', 'VanillaCF', 'DiverseCF', 'VAE_CF']
 
 # Cell
 from .import_essentials import *
-from .utils import CategoricalNormalizer, flip_binary, load_configs, l1_mean, hinge_loss
+from .utils import CategoricalNormalizer, binarize_binary, flip_binary, load_configs, l1_mean, hinge_loss
 from .base_interface import ExplainerBase, LocalExplainerBase, GlobalExplainerBase
 from .training_module import BaseModule
 from .model import MultilayerPerception
@@ -33,6 +33,23 @@ class VanillaCF(LocalExplainerBase):
         self.steps = configs.steps if 'steps' in configs else 1000
         self.cat_normalizer = cat_normalizer
         self.cf = None
+        self.prediction_threshold_mode = str(configs.get("prediction_threshold_mode", "round"))
+        resolved_threshold = configs.get("resolved_prediction_threshold", configs.get("prediction_threshold", 0.5))
+        self.prediction_threshold = float(resolved_threshold)
+
+    def _binarize_predictions(self, scores: torch.Tensor) -> torch.Tensor:
+        return binarize_binary(
+            scores,
+            threshold=self.prediction_threshold,
+            mode=self.prediction_threshold_mode,
+        )
+
+    def _flip_predictions(self, scores: torch.Tensor) -> torch.Tensor:
+        return flip_binary(
+            scores,
+            threshold=self.prediction_threshold,
+            mode=self.prediction_threshold_mode,
+        )
 
     def forward(self):
         if self.cf is None:
@@ -46,7 +63,7 @@ class VanillaCF(LocalExplainerBase):
     def _loss_functions(self, x, c):
         # target
         y_pred = self.pred_fn(x)
-        y_prime = flip_binary(y_pred)
+        y_prime = self._flip_predictions(y_pred)
 
         c_y = self.pred_fn(c)
         l_1 = F.binary_cross_entropy(c_y, y_prime)
@@ -59,7 +76,7 @@ class VanillaCF(LocalExplainerBase):
     def generate_cf(self, x: torch.Tensor):
         with torch.no_grad():
             y_pred = self.pred_fn(x).reshape(-1)
-            neg_mask = torch.round(y_pred) == 0
+            neg_mask = self._binarize_predictions(y_pred) == 0
 
         # Positive predictions are treated as no-op recourse cases for fairer
         # comparison with models that only optimize recourse for negatives.
@@ -67,7 +84,7 @@ class VanillaCF(LocalExplainerBase):
 
         if neg_mask.any():
             x_neg = x[neg_mask]
-            y_prime = flip_binary(y_pred[neg_mask])
+            y_prime = self._flip_predictions(y_pred[neg_mask])
 
             cf = nn.Parameter(x_neg.clone(), requires_grad=True)
             optim = torch.optim.RMSprop([cf], lr=0.001)

@@ -14,6 +14,7 @@ from .action_groups import (
     ActionGroupSpec,
     apply_deterministic_rule,
     load_dataset_action_groups,
+    resolve_latent_shift_loadings,
 )
 
 __all__ = [
@@ -50,6 +51,7 @@ class ActionProjectionGroup:
     num_categories: Optional[int] = None
     raw_domain: torch.Tensor = field(default_factory=lambda: torch.empty((0,), dtype=torch.float32))
     scaled_domain: torch.Tensor = field(default_factory=lambda: torch.empty((0,), dtype=torch.float32))
+    delta_domain: torch.Tensor = field(default_factory=lambda: torch.empty((0,), dtype=torch.float32))
     domain_indices: torch.Tensor = field(default_factory=lambda: torch.empty((0,), dtype=torch.long))
     pos_map: torch.Tensor = field(default_factory=lambda: torch.empty((0,), dtype=torch.long))
     increase_only: bool = False
@@ -59,6 +61,14 @@ class ActionProjectionGroup:
     rule: Dict[str, Any] = field(default_factory=dict)
     raw_v0: Optional[float] = None
     raw_step: Optional[float] = None
+    cont_indices: Tuple[int, ...] = field(default_factory=tuple)
+    scaled_feature_domains: Tuple[torch.Tensor, ...] = field(default_factory=tuple)
+    feature_increase_only: Tuple[bool, ...] = field(default_factory=tuple)
+    feature_decrease_only: Tuple[bool, ...] = field(default_factory=tuple)
+    feature_loadings: Tuple[float, ...] = field(default_factory=tuple)
+    feature_scales: Tuple[float, ...] = field(default_factory=tuple)
+    raw_shifts: torch.Tensor = field(default_factory=lambda: torch.empty((0, 0), dtype=torch.float32))
+    scaled_shifts: torch.Tensor = field(default_factory=lambda: torch.empty((0, 0), dtype=torch.float32))
 
 
 @dataclass(frozen=True)
@@ -128,6 +138,19 @@ def _resolve_category_domain_indices(
     return domain_cat_indices
 
 
+def _domain_membership_mask(
+    values: torch.Tensor,
+    domain: torch.Tensor,
+    *,
+    eps: float,
+) -> torch.Tensor:
+    if domain.numel() == 0:
+        return torch.zeros_like(values, dtype=torch.bool)
+    flat = values.reshape(-1, 1)
+    hits = torch.isclose(flat, domain.reshape(1, -1), atol=eps, rtol=0.0).any(dim=1)
+    return hits.reshape(values.shape)
+
+
 def load_supported_action_groups(
     action_groups_path: Path,
     dataset_name: str,
@@ -139,11 +162,11 @@ def load_supported_action_groups(
 
     for spec in dataset_action_groups.groups:
         gtype = int(spec.type)
-        if gtype not in (0, 1, 2):
+        if gtype not in (0, 1, 2, 4):
             if spec.mutable:
                 raise NotImplementedError(
                     f"Mutable action group '{spec.id}' in dataset '{dataset_name}' uses unsupported type={gtype}. "
-                    "Only Type 0/1/2 groups are supported."
+                    "Only Type 0/1/2/4 groups are supported."
                 )
             continue
 
@@ -152,7 +175,7 @@ def load_supported_action_groups(
                 raise ValueError(
                     f"Type 0 group '{spec.id}' in dataset '{dataset_name}' must contain exactly one feature."
                 )
-        else:
+        elif gtype in (1, 2):
             if not spec.base_features:
                 raise ValueError(
                     f"Type {gtype} group '{spec.id}' in dataset '{dataset_name}' must define roles.base."
@@ -165,11 +188,31 @@ def load_supported_action_groups(
                 raise ValueError(
                     f"Type {gtype} group '{spec.id}' in dataset '{dataset_name}' must use a single base feature."
                 )
+        else:
+            if len(spec.features) == 0:
+                raise ValueError(
+                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' must define features."
+                )
+            if not any(abs(float(v)) <= 1e-9 for v in spec.action_values):
+                raise ValueError(
+                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' must include delta=0."
+                )
+            missing_scales = [feat for feat in spec.features if feat not in spec.action_scales]
+            if missing_scales:
+                raise ValueError(
+                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' is missing scales for {missing_scales}."
+                )
+            missing_domains = [feat for feat in spec.features if feat not in spec.action_domains]
+            if missing_domains:
+                raise ValueError(
+                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' is missing domains for {missing_domains}."
+                )
 
         if learnable_only and not spec.is_learnable_values_group():
             continue
 
-        if spec.mutable and spec.action_kind not in ("values", "noop"):
+        allowed_action_kinds = ("delta_steps", "noop") if gtype == 4 else ("values", "noop")
+        if spec.mutable and spec.action_kind not in allowed_action_kinds:
             raise NotImplementedError(
                 f"Mutable action group '{spec.id}' in dataset '{dataset_name}' uses unsupported action_kind='{spec.action_kind}'."
             )
@@ -235,6 +278,7 @@ def build_action_projection_spec(
         action_size = 0
         raw_domain = torch.empty((0,), dtype=torch.float32)
         scaled_domain = torch.empty((0,), dtype=torch.float32)
+        delta_domain = torch.empty((0,), dtype=torch.float32)
         domain_indices = torch.empty((0,), dtype=torch.long)
         pos_map = torch.empty((0,), dtype=torch.long)
         num_categories: Optional[int] = None
@@ -243,8 +287,67 @@ def build_action_projection_spec(
         kind = ""
         raw_v0: Optional[float] = None
         raw_step: Optional[float] = None
+        cont_indices: Tuple[int, ...] = tuple()
+        scaled_feature_domains: Tuple[torch.Tensor, ...] = tuple()
+        feature_increase_only: Tuple[bool, ...] = tuple()
+        feature_decrease_only: Tuple[bool, ...] = tuple()
+        feature_loadings: Tuple[float, ...] = tuple()
+        feature_scales: Tuple[float, ...] = tuple()
+        raw_shifts = torch.empty((0, 0), dtype=torch.float32)
+        scaled_shifts = torch.empty((0, 0), dtype=torch.float32)
 
-        if base_feature in cont_pos:
+        if action_kind == "delta_steps":
+            if not group_features:
+                raise ValueError(f"Type 4 group '{spec.id}' in dataset '{dataset_name}' is missing features.")
+            missing_cont = [feat for feat in group_features if feat not in cont_pos]
+            if missing_cont:
+                raise NotImplementedError(
+                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' uses non-continuous runtime features: {missing_cont}."
+                )
+
+            kind = "continuous"
+            cont_indices = tuple(int(cont_pos[feat]) for feat in group_features)
+            cont_index = int(cont_indices[0])
+
+            raw_deltas = [float(v) for v in spec.action_values]
+            delta_domain = torch.tensor(raw_deltas, dtype=torch.float32)
+            action_size = int(delta_domain.numel())
+
+            loadings_map = resolve_latent_shift_loadings(
+                group_features,
+                spec.rule,
+                increase_only=tuple(str(v) for v in inc_only),
+                decrease_only=tuple(str(v) for v in dec_only),
+            )
+            feature_loadings = tuple(float(loadings_map[feat]) for feat in group_features)
+            feature_scales = tuple(float(spec.action_scales[feat]) for feat in group_features)
+            feature_increase_only = tuple(str(feat) in inc_only for feat in group_features)
+            feature_decrease_only = tuple(str(feat) in dec_only for feat in group_features)
+
+            scaled_domains_list: List[torch.Tensor] = []
+            for feat in group_features:
+                raw_vals = [float(v) for v in spec.action_domains[feat]]
+                raw_vals_t = torch.tensor(raw_vals, dtype=torch.float32)
+                scaled_domains_list.append(
+                    _scale_raw_continuous(
+                        raw_vals_t,
+                        scaler_min=scaler_min,
+                        scaler_max=scaler_max,
+                    )
+                )
+            scaled_feature_domains = tuple(scaled_domains_list)
+
+            shift_unit = torch.tensor(
+                [feature_loadings[i] * feature_scales[i] for i in range(len(group_features))],
+                dtype=torch.float32,
+            )
+            raw_shifts = delta_domain.unsqueeze(1) * shift_unit.unsqueeze(0)
+            denom = float(scaler_max - scaler_min)
+            if denom == 0.0:
+                denom = 1.0
+            scaled_shifts = raw_shifts / float(denom)
+
+        elif base_feature in cont_pos:
             kind = "continuous"
             cont_index = int(cont_pos[base_feature])
 
@@ -333,6 +436,7 @@ def build_action_projection_spec(
                 num_categories=num_categories,
                 raw_domain=raw_domain,
                 scaled_domain=scaled_domain,
+                delta_domain=delta_domain,
                 domain_indices=domain_indices,
                 pos_map=pos_map,
                 increase_only=str(base_feature) in inc_only,
@@ -342,6 +446,14 @@ def build_action_projection_spec(
                 rule=dict(spec.rule),
                 raw_v0=raw_v0,
                 raw_step=raw_step,
+                cont_indices=cont_indices,
+                scaled_feature_domains=scaled_feature_domains,
+                feature_increase_only=feature_increase_only,
+                feature_decrease_only=feature_decrease_only,
+                feature_loadings=feature_loadings,
+                feature_scales=feature_scales,
+                raw_shifts=raw_shifts,
+                scaled_shifts=scaled_shifts,
             )
         )
 
@@ -362,13 +474,51 @@ def action_feasibility_mask(
     group: ActionProjectionGroup,
     x: torch.Tensor,
     *,
-    eps: float = 1e-6,
+    eps: float = 1e-7,
     ensure_any: bool = False,
 ) -> torch.Tensor:
     action_size = int(group.action_size)
     device = x.device
     if action_size <= 0:
         return torch.zeros((x.shape[0], 0), dtype=torch.bool, device=device)
+
+    if group.action_kind == "delta_steps":
+        if not group.cont_indices:
+            raise ValueError(f"Type 4 group '{group.id}' is missing cont_indices.")
+        if len(group.scaled_feature_domains) != len(group.cont_indices):
+            raise ValueError(f"Type 4 group '{group.id}' has inconsistent feature-domain metadata.")
+
+        deltas = group.delta_domain.to(device=device, dtype=x.dtype)
+        zero_mask = torch.isclose(deltas, torch.zeros_like(deltas), atol=eps, rtol=0.0)
+        block = torch.stack([x[:, idx] for idx in group.cont_indices], dim=1)
+        shifts = group.scaled_shifts.to(device=device, dtype=x.dtype)
+
+        feasible = torch.ones((x.shape[0], action_size), dtype=torch.bool, device=device)
+        for feature_idx, domain in enumerate(group.scaled_feature_domains):
+            dom = domain.to(device=device, dtype=x.dtype)
+            cur = block[:, feature_idx]
+            cand = cur.unsqueeze(1) + shifts[:, feature_idx].unsqueeze(0)
+
+            cur_valid = _domain_membership_mask(cur, dom, eps=eps)
+            cand_valid = _domain_membership_mask(cand, dom, eps=eps)
+
+            feat_feasible = cand_valid
+            if feature_idx < len(group.feature_increase_only) and group.feature_increase_only[feature_idx]:
+                feat_feasible = feat_feasible & (cand >= (cur.unsqueeze(1) - eps))
+            if feature_idx < len(group.feature_decrease_only) and group.feature_decrease_only[feature_idx]:
+                feat_feasible = feat_feasible & (cand <= (cur.unsqueeze(1) + eps))
+
+            invalid_current = ~cur_valid
+            if invalid_current.any():
+                feat_feasible[invalid_current] = zero_mask.unsqueeze(0).expand(int(invalid_current.sum().item()), -1)
+
+            feasible = feasible & feat_feasible
+
+        if ensure_any and feasible.numel() > 0:
+            none_ok = ~feasible.any(dim=1)
+            if none_ok.any():
+                feasible[none_ok] = zero_mask.unsqueeze(0).expand(int(none_ok.sum().item()), -1)
+        return feasible
 
     if not (group.increase_only or group.decrease_only):
         return torch.ones((x.shape[0], action_size), dtype=torch.bool, device=device)
@@ -416,6 +566,42 @@ def action_feasibility_mask(
             feasible[none_ok] = True
 
     return feasible
+
+
+def _project_type4_continuous(
+    *,
+    x: torch.Tensor,
+    cf_soft: torch.Tensor,
+    group: ActionProjectionGroup,
+    eps: float,
+) -> Dict[int, torch.Tensor]:
+    if not group.cont_indices:
+        raise ValueError(f"Type 4 group '{group.id}' is missing cont_indices.")
+
+    block = torch.stack([x[:, idx] for idx in group.cont_indices], dim=1)
+    ref = torch.stack([cf_soft[:, idx] for idx in group.cont_indices], dim=1)
+    if group.action_size <= 0 or group.action_kind != "delta_steps" or not group.mutable:
+        return {idx: block[:, pos : pos + 1] for pos, idx in enumerate(group.cont_indices)}
+
+    shifts = group.scaled_shifts.to(device=x.device, dtype=x.dtype)
+    feasible = action_feasibility_mask(group, x, eps=eps, ensure_any=False)
+    inf = torch.tensor(float("inf"), device=x.device, dtype=x.dtype)
+
+    noop_score = (ref - block).pow(2).sum(dim=1, keepdim=True)
+    candidates = block.unsqueeze(1) + shifts.unsqueeze(0)
+    action_score = (ref.unsqueeze(1) - candidates).pow(2).sum(dim=2)
+    action_score = action_score.masked_fill(~feasible, inf)
+
+    scores = torch.cat((noop_score, action_score), dim=1)
+    idx = scores.argmin(dim=1)
+
+    selected = block.clone()
+    mask = idx > 0
+    if mask.any():
+        action_idx = idx[mask] - 1
+        selected[mask] = candidates[mask, action_idx]
+
+    return {feat_idx: selected[:, pos : pos + 1] for pos, feat_idx in enumerate(group.cont_indices)}
 
 
 def _project_type0_continuous(
@@ -589,13 +775,24 @@ def project_to_actionable(
     cf_soft: torch.Tensor,
     spec: ActionProjectionSpec,
     *,
-    eps: float = 1e-6,
+    eps: float = 1e-7,
 ) -> torch.Tensor:
     if x.shape != cf_soft.shape:
         raise ValueError(f"Expected x and cf_soft to have the same shape, got {x.shape} and {cf_soft.shape}.")
 
     projected = x.clone()
     for group in spec.groups:
+        if group.type == 4 and group.action_kind == "delta_steps":
+            updates = _project_type4_continuous(
+                x=x,
+                cf_soft=cf_soft,
+                group=group,
+                eps=eps,
+            )
+            for index, value in updates.items():
+                projected[:, index : index + 1] = value
+            continue
+
         if group.type in (1, 2) and group.derived:
             updates = _project_type12_continuous(
                 spec=spec,

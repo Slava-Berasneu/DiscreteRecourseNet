@@ -5,6 +5,7 @@ The constraints are from `action_groups.json`.
 Supported:
   - Type 0 groups
   - Type 1/2 groups with deterministic base-derived rules
+  - Type 4 groups with shared latent-shift deltas
   - Monotonicity constraints in `__constraints__/monotonicity`.
 """
 
@@ -19,6 +20,7 @@ from .action_groups import (
     ActionGroupSpec,
     apply_deterministic_rule,
     load_dataset_action_groups,
+    resolve_latent_shift_loadings,
 )
 
 
@@ -100,6 +102,19 @@ def _decode_cat_labels(
         except Exception:
             out.append(None)
     return out
+
+
+def _continuous_domain_membership(
+    values: torch.Tensor,
+    domain: Sequence[Any],
+    *,
+    atol: float,
+) -> torch.Tensor:
+    dom = [float(v) for v in domain if _safe_float(v) is not None]
+    if not dom:
+        return torch.zeros_like(values, dtype=torch.bool)
+    dom_t = torch.tensor(dom, device=values.device, dtype=values.dtype).view(1, -1)
+    return torch.isclose(values.view(-1, 1), dom_t, atol=atol, rtol=0.0).any(dim=1)
 
 
 def _evaluate_feature_change(
@@ -213,6 +228,8 @@ def _evaluate_feature_change(
 def _evaluate_group_rule_violation(
     *,
     group: ActionGroupSpec,
+    inc_only: Sequence[str],
+    dec_only: Sequence[str],
     x_cont_raw: torch.Tensor,
     cf_cont_raw: torch.Tensor,
     cont_idx: Dict[str, int],
@@ -221,6 +238,55 @@ def _evaluate_group_rule_violation(
 ) -> Tuple[torch.Tensor, bool]:
     n = x_cont_raw.size(0)
     zeros = torch.zeros((n,), dtype=torch.bool, device=device)
+    gtype = int(group.type)
+
+    if gtype == 4:
+        features = list(group.group_features)
+        if not features or group.action_kind != "delta_steps":
+            return zeros, False
+        if any(feat not in cont_idx for feat in features):
+            return zeros, False
+
+        try:
+            loadings_map = resolve_latent_shift_loadings(
+                tuple(features),
+                group.rule,
+                increase_only=tuple(str(v) for v in inc_only),
+                decrease_only=tuple(str(v) for v in dec_only),
+            )
+        except Exception:
+            return zeros, False
+
+        deltas = [float(v) for v in group.action_values]
+        if not deltas:
+            return zeros, False
+
+        delta_t = torch.tensor(deltas, device=device, dtype=x_cont_raw.dtype).view(1, -1)
+        any_changed = zeros.clone()
+        outside_domain_changed = zeros.clone()
+        possible = torch.ones((n, len(deltas)), dtype=torch.bool, device=device)
+        rule_atol = max(float(atol), 1e-5)
+
+        for feat in features:
+            if feat not in group.action_scales or feat not in group.action_domains:
+                return zeros, False
+
+            xj = x_cont_raw[:, cont_idx[feat]]
+            cj = cf_cont_raw[:, cont_idx[feat]]
+            changed = ~torch.isclose(cj, xj, atol=rule_atol, rtol=1e-6)
+            any_changed |= changed
+
+            dom = list(group.action_domains.get(feat, ()))
+            x_valid = _continuous_domain_membership(xj, dom, atol=rule_atol)
+            c_valid = _continuous_domain_membership(cj, dom, atol=rule_atol)
+            outside_domain_changed |= changed & (~x_valid | ~c_valid)
+
+            step = float(group.action_scales[feat]) * float(loadings_map[feat])
+            candidate = xj.view(-1, 1) + delta_t * float(step)
+            possible &= torch.isclose(cj.view(-1, 1), candidate, atol=rule_atol, rtol=1e-6)
+
+        violations = any_changed & (outside_domain_changed | (~possible.any(dim=1)))
+        return violations, True
 
     base_feats = list(group.base_features)
     derived_feats = list(group.derived_features)
@@ -319,14 +385,16 @@ class ActionabilityMetrics:
     - immutability constraints (immutable/no-op features must not change)
     - monotonicity constraints (increase-only / decrease-only)
     - Type 1/2 deterministic group-rule constraints
+    - Type 4 shared-delta consistency constraints
       - `clip_derived_to_base` is checked as an exact consistency rule
       - `derived_adds_base_delta` is checked as a one-way lower bound
+      - `latent_shift` is checked by existence of one allowed common delta across all group features
 
     Fields:
       - actionability_rate: fraction of samples with no violations.
       - monotonicity_violation_rate: fraction of samples with >=1 monotonicity violation.
       - immutability_violation_rate: fraction of samples with >=1 immutable-feature change.
-      - group_rule_violation_rate: fraction of samples with >=1 Type 1/2 rule violation.
+      - group_rule_violation_rate: fraction of samples with >=1 Type 1/2/4 rule violation.
       - avg_num_violations: mean number of violations per sample.
       - avg_num_changes: mean number of changed features per sample.
       - valid_change_rate: among all changes, fraction that are valid
@@ -369,6 +437,7 @@ def compute_actionability_metrics(
       - Type 1/2 groups with rules:
         - `clip_derived_to_base`: exact consistency
         - `derived_adds_base_delta`: conditional lower-bound consistency
+      - Type 4 groups with a shared allowed latent-shift delta
     """
     if only_mask is not None:
         x = x[only_mask]
@@ -414,7 +483,7 @@ def compute_actionability_metrics(
     for spec in dataset_action_groups.groups:
         gname = spec.id
         gtype = int(spec.type)
-        if gtype not in (0, 1, 2):
+        if gtype not in (0, 1, 2, 4):
             continue
 
         mutable = bool(spec.mutable)
@@ -438,7 +507,10 @@ def compute_actionability_metrics(
 
         for feat in group_features:
             feat_specials = spec.special_values_for(feat)
-            feat_action_kind = kind if feat == base_feat else ('noop' if ((not mutable) or kind == 'noop') else 'values')
+            if gtype == 4:
+                feat_action_kind = 'noop' if ((not mutable) or kind == 'noop') else kind
+            else:
+                feat_action_kind = kind if feat == base_feat else ('noop' if ((not mutable) or kind == 'noop') else 'values')
             feat_domain_values = list(spec.action_values) if feat == base_feat else None
 
             stats = _evaluate_feature_change(
@@ -471,9 +543,11 @@ def compute_actionability_metrics(
             num_violations += stats['mono_viol'].long() + stats['immut_viol'].long()
             feature_pre_valids.append(stats['pre_valid'])
 
-        if gtype in (1, 2) and mutable and kind != 'noop':
+        if gtype in (1, 2, 4) and mutable and kind != 'noop':
             g_rule_viol, rule_supported = _evaluate_group_rule_violation(
                 group=spec,
+                inc_only=inc_only,
+                dec_only=dec_only,
                 x_cont_raw=x_cont_raw,
                 cf_cont_raw=cf_cont_raw,
                 cont_idx=cont_idx,

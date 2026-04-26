@@ -1,5 +1,6 @@
 __all__ = ['check_input_type', 'check_object_input_type', 'l1_mean', 'hinge_loss', 'get_loss_functions', 'split_X_y',
-           'train_val_test_split', 'uniform', 'smooth_y', 'flip_binary']
+           'train_val_test_split', 'uniform', 'smooth_y', 'binarize_binary', 'flip_binary',
+           'select_balanced_accuracy_threshold']
 
 # Cell
 from .import_essentials import *
@@ -104,8 +105,85 @@ def smooth_y(y, device=None):
         uniform(y.size(), 0.8, 0.95, device=y.device),
         uniform(y.size(), 0.05, 0.2, device=y.device))
 
-# Comes from 02b_counter_net.ipynb, cell
-@check_input_type
-def flip_binary(x):
-    assert ((x < 0) & (x > 1)).sum() == 0
-    return (1 - torch.round(x)).clone().detach()
+
+def binarize_binary(x, threshold: Optional[float] = None, mode: str = "round"):
+    x = _check_type(x)
+    mode = str(mode or "round")
+    assert ((x < 0) | (x > 1)).sum() == 0
+
+    if mode == "round":
+        return torch.round(x).clone().detach()
+
+    if mode in ("fixed", "auto_val_balanced_accuracy"):
+        thr = float(0.5 if threshold is None else threshold)
+        return (x >= thr).to(x.dtype).clone().detach()
+
+    raise ValueError(
+        f"Unsupported prediction threshold mode '{mode}'. "
+        "Expected one of: round, fixed, auto_val_balanced_accuracy."
+    )
+
+
+def flip_binary(x, threshold: Optional[float] = None, mode: str = "round"):
+    x_bin = binarize_binary(x, threshold=threshold, mode=mode)
+    return (1 - x_bin).clone().detach()
+
+
+def select_balanced_accuracy_threshold(
+    scores,
+    target,
+    *,
+    default: float = 0.5,
+) -> float:
+    scores = _check_type(scores).reshape(-1).detach().cpu()
+    target = _check_type(target).reshape(-1).detach().cpu()
+    target = (target >= 0.5).to(torch.int64)
+
+    if scores.numel() == 0 or target.numel() == 0:
+        return float(default)
+
+    pos = int((target == 1).sum().item())
+    neg = int((target == 0).sum().item())
+    if pos == 0 or neg == 0:
+        return float(default)
+
+    unique_scores = torch.unique(scores)
+    if unique_scores.numel() == 0:
+        return float(default)
+
+    unique_scores, _ = torch.sort(unique_scores)
+    eps = torch.finfo(unique_scores.dtype).eps
+    candidates = torch.cat((unique_scores, unique_scores[-1:] + eps))
+
+    best_ba = float("-inf")
+    best_acc = float("-inf")
+    best_distance = float("inf")
+    best_threshold = float(default)
+
+    for thr_t in candidates:
+        thr = float(thr_t.item())
+        pred = (scores >= thr_t).to(torch.int64)
+
+        tp = int(((pred == 1) & (target == 1)).sum().item())
+        tn = int(((pred == 0) & (target == 0)).sum().item())
+        tpr = float(tp) / float(pos)
+        tnr = float(tn) / float(neg)
+        ba = 0.5 * (tpr + tnr)
+        acc = float((pred == target).float().mean().item())
+        distance = abs(thr - float(default))
+
+        is_better = False
+        if ba > best_ba + 1e-12:
+            is_better = True
+        elif abs(ba - best_ba) <= 1e-12 and acc > best_acc + 1e-12:
+            is_better = True
+        elif abs(ba - best_ba) <= 1e-12 and abs(acc - best_acc) <= 1e-12 and distance < best_distance - 1e-12:
+            is_better = True
+
+        if is_better:
+            best_ba = ba
+            best_acc = acc
+            best_distance = distance
+            best_threshold = thr
+
+    return float(best_threshold)

@@ -42,7 +42,7 @@ MODELS_TO_RUN: List[str] = [
     "discrete_recoursenet",
     "counternet_projection",
     "counternet",
-    "vanillacf"
+    #"vanillacf"
 ]
 
 # Comparison-mode per-model settings
@@ -68,7 +68,7 @@ MODEL_RUN_SETTINGS: Dict[str, Dict[str, Any]] = {
         "ablation": "cfgen_flip_neg_stay_pos"
         # "ablation": "cfgen_flip_neg_stay_pos",
     },
-    "vanillacf": {}
+    #"vanillacf": {}
 }
 
 MODEL_REGISTRY = {

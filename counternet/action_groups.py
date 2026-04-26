@@ -17,6 +17,7 @@ __all__ = [
     "apply_deterministic_rule",
     "feature_special_values",
     "load_dataset_action_groups",
+    "resolve_latent_shift_loadings",
 ]
 
 
@@ -61,6 +62,60 @@ def _ordered_unique(values: List[str]) -> Tuple[str, ...]:
     return tuple(out)
 
 
+def _float_mapping(raw: Any) -> Dict[str, float]:
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, float] = {}
+    for key, value in raw.items():
+        try:
+            out[str(key)] = float(value)
+        except Exception as exc:
+            raise ValueError(f"Expected numeric mapping value for '{key}', got {value!r}.") from exc
+    return out
+
+
+def _tuple_mapping(raw: Any) -> Dict[str, Tuple[Any, ...]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: Dict[str, Tuple[Any, ...]] = {}
+    for key, value in raw.items():
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"Expected list/tuple domain for '{key}', got {value!r}.")
+        out[str(key)] = tuple(value)
+    return out
+
+
+def resolve_latent_shift_loadings(
+    features: Tuple[str, ...],
+    rule: Dict[str, Any],
+    *,
+    increase_only: Optional[Tuple[str, ...]] = None,
+    decrease_only: Optional[Tuple[str, ...]] = None,
+) -> Dict[str, float]:
+    params = dict(rule.get("params", {})) if isinstance(rule, dict) else {}
+    explicit = _float_mapping(params.get("loadings", {}))
+    if explicit:
+        missing = [feat for feat in features if feat not in explicit]
+        extra = [feat for feat in explicit.keys() if feat not in features]
+        if missing:
+            raise ValueError(f"Latent-shift group is missing loadings for features: {missing}")
+        if extra:
+            raise ValueError(f"Latent-shift group defines loadings for unknown features: {extra}")
+        return {feat: float(explicit[feat]) for feat in features}
+
+    inc = set(str(v) for v in (increase_only or ()))
+    dec = set(str(v) for v in (decrease_only or ()))
+    if features and all(feat in inc for feat in features):
+        return {feat: 1.0 for feat in features}
+    if features and all(feat in dec for feat in features):
+        return {feat: -1.0 for feat in features}
+
+    raise ValueError(
+        "Latent-shift group requires explicit rule.params.loadings unless all features are "
+        "uniformly increase_only or uniformly decrease_only."
+    )
+
+
 @dataclass(frozen=True)
 class ActionGroupSpec:
     """Normalized view of one action-group entry from action_groups.json."""
@@ -72,6 +127,8 @@ class ActionGroupSpec:
     action_kind: str = "values"
     action_feature: Optional[str] = None
     action_values: Tuple[Any, ...] = field(default_factory=tuple)
+    action_scales: Dict[str, float] = field(default_factory=dict)
+    action_domains: Dict[str, Tuple[Any, ...]] = field(default_factory=dict)
     base_features: Tuple[str, ...] = field(default_factory=tuple)
     derived_features: Tuple[str, ...] = field(default_factory=tuple)
     rule: Dict[str, Any] = field(default_factory=dict)
@@ -105,7 +162,7 @@ class ActionGroupSpec:
         return feature_special_values(self.special_values, feat)
 
     def is_learnable_values_group(self) -> bool:
-        return self.mutable and self.action_kind == "values" and self.action_size > 0
+        return self.mutable and self.action_kind in ("values", "delta_steps") and self.action_size > 0
 
 
 @dataclass(frozen=True)
@@ -137,7 +194,13 @@ def _parse_action_group_spec(group_id: str, raw_group: Dict[str, Any]) -> Action
     if not features and (base_features or derived_features):
         features = _ordered_unique(list(base_features) + list(derived_features))
 
-    raw_values = ad.get("values", []) if ad.get("kind", "values") == "values" else []
+    action_kind = str(ad.get("kind", "values"))
+    if action_kind == "values":
+        raw_values = ad.get("values", [])
+    elif action_kind == "delta_steps":
+        raw_values = ad.get("deltas", [])
+    else:
+        raw_values = []
     if not isinstance(raw_values, (list, tuple)):
         raw_values = []
 
@@ -146,9 +209,11 @@ def _parse_action_group_spec(group_id: str, raw_group: Dict[str, Any]) -> Action
         type=int(raw_group.get("type", -1)),
         mutable=bool(raw_group.get("mutable", True)),
         features=features,
-        action_kind=str(ad.get("kind", "values")),
+        action_kind=action_kind,
         action_feature=action_feature,
         action_values=tuple(raw_values),
+        action_scales=_float_mapping(ad.get("scales", {})),
+        action_domains=_tuple_mapping(ad.get("domains", {})),
         base_features=base_features,
         derived_features=derived_features,
         rule=dict(rule),
