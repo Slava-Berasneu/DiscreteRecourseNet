@@ -4,8 +4,8 @@ The constraints are from `action_groups.json`.
 
 Supported:
   - Type 0 groups
-  - Type 1/2 groups with deterministic base-derived rules
-  - Type 4 groups with shared latent-shift deltas
+  - Type 1 groups with deterministic base-derived rules
+  - Type 3 groups with shared latent-shift deltas
   - Monotonicity constraints in `__constraints__/monotonicity`.
 """
 
@@ -240,7 +240,7 @@ def _evaluate_group_rule_violation(
     zeros = torch.zeros((n,), dtype=torch.bool, device=device)
     gtype = int(group.type)
 
-    if gtype == 4:
+    if gtype == 3:
         features = list(group.group_features)
         if not features or group.action_kind != "delta_steps":
             return zeros, False
@@ -384,8 +384,8 @@ class ActionabilityMetrics:
 
     - immutability constraints (immutable/no-op features must not change)
     - monotonicity constraints (increase-only / decrease-only)
-    - Type 1/2 deterministic group-rule constraints
-    - Type 4 shared-delta consistency constraints
+    - Type 1 deterministic group-rule constraints
+    - Type 3 shared-delta consistency constraints
       - `clip_derived_to_base` is checked as an exact consistency rule
       - `derived_adds_base_delta` is checked as a one-way lower bound
       - `latent_shift` is checked by existence of one allowed common delta across all group features
@@ -394,7 +394,7 @@ class ActionabilityMetrics:
       - actionability_rate: fraction of samples with no violations.
       - monotonicity_violation_rate: fraction of samples with >=1 monotonicity violation.
       - immutability_violation_rate: fraction of samples with >=1 immutable-feature change.
-      - group_rule_violation_rate: fraction of samples with >=1 Type 1/2/4 rule violation.
+      - group_rule_violation_rate: fraction of samples with >=1 Type 1/3 rule violation.
       - avg_num_violations: mean number of violations per sample.
       - avg_num_changes: mean number of changed features per sample.
       - valid_change_rate: among all changes, fraction that are valid
@@ -434,10 +434,10 @@ def compute_actionability_metrics(
 
     Supported:
       - Type 0 singleton groups
-      - Type 1/2 groups with rules:
+      - Type 1 groups with rules:
         - `clip_derived_to_base`: exact consistency
         - `derived_adds_base_delta`: conditional lower-bound consistency
-      - Type 4 groups with a shared allowed latent-shift delta
+      - Type 3 groups with a shared allowed latent-shift delta
     """
     if only_mask is not None:
         x = x[only_mask]
@@ -483,7 +483,7 @@ def compute_actionability_metrics(
     for spec in dataset_action_groups.groups:
         gname = spec.id
         gtype = int(spec.type)
-        if gtype not in (0, 1, 2, 4):
+        if gtype not in (0, 1, 3):
             continue
 
         mutable = bool(spec.mutable)
@@ -507,7 +507,7 @@ def compute_actionability_metrics(
 
         for feat in group_features:
             feat_specials = spec.special_values_for(feat)
-            if gtype == 4:
+            if gtype == 3:
                 feat_action_kind = 'noop' if ((not mutable) or kind == 'noop') else kind
             else:
                 feat_action_kind = kind if feat == base_feat else ('noop' if ((not mutable) or kind == 'noop') else 'values')
@@ -543,7 +543,7 @@ def compute_actionability_metrics(
             num_violations += stats['mono_viol'].long() + stats['immut_viol'].long()
             feature_pre_valids.append(stats['pre_valid'])
 
-        if gtype in (1, 2, 4) and mutable and kind != 'noop':
+        if gtype in (1, 3) and mutable and kind != 'noop':
             g_rule_viol, rule_supported = _evaluate_group_rule_violation(
                 group=spec,
                 inc_only=inc_only,

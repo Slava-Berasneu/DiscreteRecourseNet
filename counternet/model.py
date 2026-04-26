@@ -162,18 +162,18 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
 
     Currently implemented:
       - Type 0 (singleton) action groups
-      - Type 1/2 (base + derived) action groups
-      - Type 4 (joint latent-shift) action groups
+      - Type 1 (base + derived) action groups
+      - Type 3 (joint latent-shift) action groups
 
     Expected action_groups.json schema:
       action_groups[dataset][group_id] = {
-        "type": 0|1|2|4,
+        "type": 0|1|3,
         "features": ["feature_name", ...],
         "mutable": true/false,
         "action_domain": {"kind": "values"|"noop", "feature": "...", "values": [...]} |
                          {"kind": "delta_steps", "deltas": [...], "scales": {...}, "domains": {...}},
-        "roles": {"base": [...], "derived": [...]},   # type 1/2 only
-        "rule": {"kind": "...", "params": {...}},      # type 1/2 only
+        "roles": {"base": [...], "derived": [...]},   # type 1 only
+        "rule": {"kind": "...", "params": {...}},      # type 1 or type 3
       }
       action_groups[dataset]["__constraints__"]["monotonicity"] = {
         "increase_only": [...], "decrease_only": [...]
@@ -183,8 +183,8 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
       - Domains in action_groups.json are in feature space (raw values for continuous, category labels for discrete).
       - This model maps those domains into the preprocessed input space using the fitted MinMaxScaler and OneHotEncoder
         categories stored in CategoricalNormalizer.
-      - Type 1/2 groups act on the base feature only, derived features are updated using _apply_derived_constraints.
-      - Type 4 groups act on all listed continuous features using one shared discrete delta.
+      - Type 1 groups act on the base feature only, derived features are updated using _apply_derived_constraints.
+      - Type 3 groups act on all listed continuous features using one shared discrete delta.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -327,11 +327,11 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
             n_cont = sum(1 for group in runtime_groups if group.kind == "continuous")
             n_cat = sum(1 for group in runtime_groups if group.kind == "categorical")
             n_t0 = sum(1 for group in runtime_groups if int(group.type) == 0)
-            n_t12 = sum(1 for group in runtime_groups if int(group.type) in (1, 2))
-            n_t4 = sum(1 for group in runtime_groups if int(group.type) == 4)
+            n_t1 = sum(1 for group in runtime_groups if int(group.type) == 1)
+            n_t3 = sum(1 for group in runtime_groups if int(group.type) == 3)
             print(
                 f"[DiscreteRecourseNet] Loaded {len(runtime_groups)} groups "
-                f"(type0={n_t0}, type1+2={n_t12}, type4={n_t4}, "
+                f"(type0={n_t0}, type1={n_t1}, type3={n_t3}, "
                 f"continuous={n_cont}, categorical={n_cat}) "
                 f"for dataset='{self.dataset_name}'."
             )
@@ -576,7 +576,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                 total_cost = total_cost + (w * apply_p * (self.action_cost_base + mag))
             if group.action_kind == "delta_steps":
                 if not group.cont_indices:
-                    raise ValueError(f"Type 4 group '{group.id}' is missing cont_indices.")
+                    raise ValueError(f"Type 3 group '{group.id}' is missing cont_indices.")
                 shift = a_onehot @ group.scaled_shifts.to(device=x.device, dtype=x.dtype)  # (B,F)
                 x_block = torch.stack([x[:, idx] for idx in group.cont_indices], dim=1)
                 target_block = x_block + shift
@@ -642,7 +642,7 @@ class DiscreteRecourseNetModel(CFNetTrainingModule):
                         a_apply_soft * target_block_soft + (1.0 - a_apply_soft) * x[:, s:e],
                     )
 
-            # Type 1/2: apply derived constraints
+            # Type 1: apply derived constraints
             if group.derived:
                 c, c_soft = self._apply_derived_constraints(
                     group, x, c, c_soft, a_apply, a_apply_soft

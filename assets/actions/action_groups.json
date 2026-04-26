@@ -97,7 +97,7 @@
       }
     },
     "Stop_New_Credit_Applications": {
-      "type": 2,
+      "type": 1,
       "features": ["NumInqLast6M", "NumInqLast6Mexcl7days"],
       "mutable": true,
       "action_domain": {
@@ -126,7 +126,7 @@
       }
     },
     "Build_Satisfactory_Credit_History": {
-      "type": 2,
+      "type": 1,
       "features": ["NumSatisfactoryTrades", "NumTotalTrades"],
       "mutable": true,
       "action_domain": {
@@ -156,7 +156,7 @@
       }
     },
     "Reduce_More_Severe_Delinquencies": {
-      "type": 2,
+      "type": 1,
       "features": ["NumTrades60Ever2DerogPubRec", "NumTrades90Ever2DerogPubRec"],
       "mutable": true,
       "action_domain": {
@@ -180,7 +180,7 @@
       }
     },
     "Pay_Down_Revolving_Debt": {
-      "type": 4,
+      "type": 3,
       "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
       "mutable": true,
       "action_domain": {
@@ -455,7 +455,7 @@
       }
     },
     "Increase_Online_Participation": {
-      "type": 4,
+      "type": 3,
       "features": ["forumng_click", "homepage_click", "subpage_click", "resource_click", "url_click", "oucontent_click"],
       "mutable": true,
       "action_domain": {

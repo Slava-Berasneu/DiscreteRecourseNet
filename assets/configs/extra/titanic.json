@@ -7,6 +7,8 @@
     "lambda_2": 0.01,
     "lambda_3": 0.2,
     "threshold": 1.0,
+    "prediction_threshold_mode": "auto_val_balanced_accuracy",
+    "prediction_threshold": 0.5,
     "continous_cols": [
         "Age",
         "Fare"

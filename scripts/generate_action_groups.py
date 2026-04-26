@@ -28,19 +28,18 @@ Output structure:
 Action group types:
 
 Type 0: Independent singleton group (one feature)
-Type 1: Physically constrained (base -> derived via deterministic map)
-Type 2: Part-whole (base -> derived via deterministic map)
-Type 3: Momentum / temporal sequence
-Type 4: Latent behavior cluster
-Type 5: One-hot choice block
+Type 1: Deterministic dependency (base -> derived via deterministic map)
+Type 2: Momentum / temporal sequence
+Type 3: Latent behavior cluster
+Type 4: One-hot choice block
 
 Action domains (finite):
 
 - kind="noop"        : {"kind":"noop","values":[0]} (immutable)
 - kind="values"      : {"kind":"values","feature":"f","values":[...]} (single head)
 - kind="cartesian"   : {"kind":"cartesian","features":[...],"domains":{f:[...],...}} (multi-head)
-- kind="delta_steps" : {"kind":"delta_steps","deltas":[...],"scales":{f:s,...},"domains":{f:[...],...}} (Type 4)
-- kind="choice"      : {"kind":"choice","values":[1..m],"mapping":{...}} (Type 5)
+- kind="delta_steps" : {"kind":"delta_steps","deltas":[...],"scales":{f:s,...},"domains":{f:[...],...}} (Type 3)
+- kind="choice"      : {"kind":"choice","values":[1..m],"mapping":{...}} (Type 4)
 """
 
 from __future__ import annotations
@@ -55,67 +54,17 @@ Number = Union[int, float]
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # Add/modify groups here. Anything not listed becomes Type 0
-'''
-GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
-    "adult": [],
-    "home": [
-        {
-            "id": "Stop_New_Credit_Applications",
-            "type": 2,
-            "roles": {"base": ["NumInqLast6M"], "derived": ["NumInqLast6Mexcl7days"]},
-            "rule": {"kind": "clip_derived_to_base", "params": {"base": "NumInqLast6M"}},
-        },
-        {
-            "id": "Build_Satisfactory_Credit_History",
-            "type": 2,
-            "roles": {"base": ["NumSatisfactoryTrades"], "derived": ["NumTotalTrades"]},
-            "rule": {
-                "kind": "derived_adds_base_delta",
-                "params": {"base": "NumSatisfactoryTrades", "derived": "NumTotalTrades"},
-            },
-        },
-        {
-            "id": "Pay_Down_Revolving_Debt",
-            "type": 4,
-            "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
-            "rule": {"kind": "latent_shift", "params": {"scaling": "step_size"}},
-        },
-    ],
-    "student": [
-        {
-            "id": "Increase_Online_Participation",
-            "type": 4,
-            "features": ["forumng_click", "homepage_click", "subpage_click", "resource_click", "url_click", "oucontent_click"],
-            "rule": {"kind": "latent_shift", "params": {"scaling": "step_size"}},
-        }
-    ],
-    "credit_card": [
-        {
-            "id": "Reduce_Spending_Habits",
-            "type": 3,
-            "roles": {"time_order": ["BILL_AMT1", "BILL_AMT2", "BILL_AMT3", "BILL_AMT4", "BILL_AMT5", "BILL_AMT6"]},
-            "rule": {"kind": "exponential_smoothing", "params": {"alpha": 0.7}},
-        },
-        {
-            "id": "Improve_Payment_Consistency",
-            "type": 3,
-            "roles": {"time_order": ["PAY_0", "PAY_2", "PAY_3", "PAY_4", "PAY_5", "PAY_6"]},
-            "rule": {"kind": "sequential_consistency", "params": {}},
-        },
-    ],
-}
-'''
 GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
     "adult": [],
     "home": [{
             "id": "Stop_New_Credit_Applications",
-            "type": 2,
+            "type": 1,
             "roles": {"base": ["NumInqLast6M"], "derived": ["NumInqLast6Mexcl7days"]},
             "rule": {"kind": "clip_derived_to_base", "params": {"base": "NumInqLast6M"}},
         },
         {
             "id": "Build_Satisfactory_Credit_History",
-            "type": 2,
+            "type": 1,
             "roles": {"base": ["NumSatisfactoryTrades"], "derived": ["NumTotalTrades"]},
             "rule": {
                 "kind": "derived_adds_base_delta",
@@ -124,7 +73,7 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
         },
         {
             "id": "Reduce_More_Severe_Delinquencies",
-            "type": 2,
+            "type": 1,
             "roles": {"base": ["NumTrades60Ever2DerogPubRec"], "derived": ["NumTrades90Ever2DerogPubRec"]},
             "rule": {
                 "kind": "clip_derived_to_base",
@@ -133,7 +82,7 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
         },
         {
             "id": "Pay_Down_Revolving_Debt",
-            "type": 4,
+            "type": 3,
             "features": ["NetFractionRevolvingBurden", "NumBank2NatlTradesWHighUtilization"],
             "delta_domain": [0, 1, 2, 3],
             "rule": {"kind": "latent_shift", "params": {}},
@@ -141,7 +90,7 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
     "student": [
         {
             "id": "Increase_Online_Participation",
-            "type": 4,
+            "type": 3,
             "features": ["forumng_click", "homepage_click", "subpage_click", "resource_click", "url_click", "oucontent_click"],
             "delta_domain": [0, 1, 2, 3],
             "rule": {"kind": "latent_shift", "params": {}},
@@ -150,8 +99,8 @@ GROUP_SPECS: Dict[str, List[Dict[str, Any]]] = {
     "credit_card": []
 }
 
-# Default delta domain for Type 4 groups
-DEFAULT_TYPE4_DELTA_DOMAIN: List[int] = [0, 1, 2, 3]
+# Default delta domain for Type 3 latent-shift groups
+DEFAULT_TYPE3_DELTA_DOMAIN: List[int] = [0, 1, 2, 3]
 
 DEFAULT_MAX_VALUE_LIST_SIZE = 20000
 DEFAULT_LIST_WRAP = 20
@@ -323,8 +272,8 @@ def _feature_action_values(feature_meta: Dict[str, Any], max_size: int) -> Tuple
     raise ValueError(f"Unknown/unsupported feature type: {ftype}")
 
 
-def _type4_scales(features_meta: Dict[str, Dict[str, Any]], feats: Sequence[str]) -> Dict[str, float]:
-    """Compute per-feature scale for Type 4 groups
+def _type3_scales(features_meta: Dict[str, Dict[str, Any]], feats: Sequence[str]) -> Dict[str, float]:
+    """Compute per-feature scale for Type 3 latent-shift groups
 
     scale = step_size for continuous features
     else if numeric ordinal: infer step from domain
@@ -333,7 +282,7 @@ def _type4_scales(features_meta: Dict[str, Dict[str, Any]], feats: Sequence[str]
     for f in feats:
         meta = features_meta[f]
         if meta.get("mutable") is False:
-            raise ValueError(f"Type 4 group contains immutable feature '{f}' (not allowed).")
+            raise ValueError(f"Type 3 group contains immutable feature '{f}' (not allowed).")
 
         ftype = meta.get("type")
         if ftype == "continuous":
@@ -349,14 +298,14 @@ def _type4_scales(features_meta: Dict[str, Dict[str, Any]], feats: Sequence[str]
                 continue
             # allow numeric ordinal only
             if not all(_is_number(v) for v in dom):
-                raise ValueError(f"Type 4 feature '{f}' is non-numeric ordinal; cannot apply additive delta.")
+                raise ValueError(f"Type 3 feature '{f}' is non-numeric ordinal; cannot apply additive delta.")
             scales[f] = float(_infer_numeric_step_from_domain(dom))
         else:
-            raise ValueError(f"Type 4 feature '{f}' has type '{ftype}' which is not additive.")
+            raise ValueError(f"Type 3 feature '{f}' has type '{ftype}' which is not additive.")
     return scales
 
 
-def _type4_domains(
+def _type3_domains(
     features_meta: Dict[str, Dict[str, Any]],
     feats: Sequence[str],
     max_size: int,
@@ -365,12 +314,12 @@ def _type4_domains(
     for f in feats:
         vals, _ = _feature_action_values(features_meta[f], max_size=max_size)
         if not vals:
-            raise ValueError(f"Type 4 feature '{f}' has empty actionable domain.")
+            raise ValueError(f"Type 3 feature '{f}' has empty actionable domain.")
         domains[f] = list(vals)
     return domains
 
 
-def _type4_loadings(
+def _type3_loadings(
     feats: Sequence[str],
     spec: Dict[str, Any],
     *,
@@ -381,14 +330,14 @@ def _type4_loadings(
     explicit = params.get("loadings", {})
     if explicit:
         if not isinstance(explicit, dict):
-            raise ValueError(f"Type 4 loadings must be a mapping, got {explicit!r}")
+            raise ValueError(f"Type 3 loadings must be a mapping, got {explicit!r}")
         out = {str(k): float(v) for k, v in explicit.items()}
         missing = [f for f in feats if f not in out]
         extra = [k for k in out.keys() if k not in feats]
         if missing:
-            raise ValueError(f"Type 4 group is missing loadings for features {missing}")
+            raise ValueError(f"Type 3 group is missing loadings for features {missing}")
         if extra:
-            raise ValueError(f"Type 4 group defines loadings for unknown features {extra}")
+            raise ValueError(f"Type 3 group defines loadings for unknown features {extra}")
         return {f: out[f] for f in feats}
 
     inc = set(str(v) for v in increase_only)
@@ -399,7 +348,7 @@ def _type4_loadings(
         return {f: -1.0 for f in feats}
 
     raise ValueError(
-        "Type 4 group requires explicit rule.params.loadings unless all features are "
+        "Type 3 group requires explicit rule.params.loadings unless all features are "
         "uniformly increase_only or uniformly decrease_only."
     )
 
@@ -521,20 +470,20 @@ def compile_groups_for_dataset(
     for spec in group_specs:
         gid = spec["id"]
         gtype = int(spec["type"])
-        if gtype not in {0, 1, 2, 3, 4, 5}:
+        if gtype not in {0, 1, 2, 3, 4}:
             raise ValueError(f"Invalid group type {gtype} for group '{gid}' in dataset '{dataset}'.")
 
         roles = spec.get("roles")
 
-        if gtype in {1, 2}:
+        if gtype == 1:
             roles = spec.get("roles", {})
             base = roles.get("base", [])
             derived = roles.get("derived", [])
             feats = list(base) + list(derived)
-        elif gtype == 3:
+        elif gtype == 2:
             roles = spec.get("roles", {})
             feats = list(roles.get("time_order", []))
-        elif gtype == 5:
+        elif gtype == 4:
             feats = list(spec.get("features", []))
             roles = spec.get("roles") or {"onehot_block": feats}
         else:
@@ -569,10 +518,10 @@ def compile_groups_for_dataset(
                 vals, _ = _feature_action_values(features_meta[f], max_size=max_value_list_size)
                 action_domain = {"kind": "values", "feature": f, "values": vals}
 
-            elif gtype in {1, 2}:
+            elif gtype == 1:
                 base = list(spec["roles"]["base"])
                 if not base:
-                    raise ValueError(f"Type {gtype} group '{gid}' must define roles.base")
+                    raise ValueError(f"Type 1 group '{gid}' must define roles.base")
                 if len(base) == 1:
                     f0 = base[0]
                     vals, _ = _feature_action_values(features_meta[f0], max_size=max_value_list_size)
@@ -584,23 +533,23 @@ def compile_groups_for_dataset(
                         domains[f] = vals
                     action_domain = {"kind": "cartesian", "features": base, "domains": domains}
 
-            elif gtype == 3:
+            elif gtype == 2:
                 time_order = list(spec["roles"]["time_order"])
                 if not time_order:
-                    raise ValueError(f"Type 3 group '{gid}' must define roles.time_order")
+                    raise ValueError(f"Type 2 group '{gid}' must define roles.time_order")
                 f0 = time_order[0]
                 vals, _ = _feature_action_values(features_meta[f0], max_size=max_value_list_size)
                 action_domain = {"kind": "values", "feature": f0, "values": vals}
 
-            elif gtype == 4:
-                delta_domain = list(spec.get("delta_domain", DEFAULT_TYPE4_DELTA_DOMAIN))
+            elif gtype == 3:
+                delta_domain = list(spec.get("delta_domain", DEFAULT_TYPE3_DELTA_DOMAIN))
                 if not all(isinstance(d, int) for d in delta_domain):
-                    raise ValueError(f"Type 4 delta_domain must be integers (delta steps), got {delta_domain}")
+                    raise ValueError(f"Type 3 delta_domain must be integers (delta steps), got {delta_domain}")
                 if 0 not in delta_domain:
-                    raise ValueError(f"Type 4 delta_domain must include 0, got {delta_domain}")
-                scales = _type4_scales(features_meta, feats)
-                domains = _type4_domains(features_meta, feats, max_size=max_value_list_size)
-                loadings = _type4_loadings(
+                    raise ValueError(f"Type 3 delta_domain must include 0, got {delta_domain}")
+                scales = _type3_scales(features_meta, feats)
+                domains = _type3_domains(features_meta, feats, max_size=max_value_list_size)
+                loadings = _type3_loadings(
                     feats,
                     spec,
                     increase_only=inc_only,
@@ -613,7 +562,7 @@ def compile_groups_for_dataset(
                     "domains": domains,
                 }
 
-            elif gtype == 5:
+            elif gtype == 4:
                 m = len(feats)
                 action_domain = {
                     "kind": "choice",
@@ -645,12 +594,12 @@ def compile_groups_for_dataset(
         if special_values_payload is not None:
             group_obj["special_values"] = special_values_payload
 
-        if roles is not None and gtype in {1, 2, 3, 5}:
+        if roles is not None and gtype in {1, 2, 4}:
             group_obj["roles"] = roles
 
         if "rule" in spec and spec["rule"] is not None:
             rule_payload = dict(spec["rule"])
-            if gtype == 4:
+            if gtype == 3:
                 params = dict(rule_payload.get("params", {}) or {})
                 params["loadings"] = loadings
                 rule_payload["params"] = params

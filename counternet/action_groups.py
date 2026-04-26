@@ -39,7 +39,7 @@ def apply_deterministic_rule(
     x_derived: torch.Tensor,
     c_base: torch.Tensor,
 ) -> torch.Tensor:
-    """Apply a Type 1/2 rule in raw feature space."""
+    """Apply a Type 1 deterministic dependency rule in raw feature space."""
     del params  # Reserved for future rule-specific parameters.
     if kind == "clip_derived_to_base":
         return torch.minimum(x_derived, c_base)

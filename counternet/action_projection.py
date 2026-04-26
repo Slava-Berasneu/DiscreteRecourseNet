@@ -162,11 +162,11 @@ def load_supported_action_groups(
 
     for spec in dataset_action_groups.groups:
         gtype = int(spec.type)
-        if gtype not in (0, 1, 2, 4):
+        if gtype not in (0, 1, 3):
             if spec.mutable:
                 raise NotImplementedError(
                     f"Mutable action group '{spec.id}' in dataset '{dataset_name}' uses unsupported type={gtype}. "
-                    "Only Type 0/1/2/4 groups are supported."
+                    "Only Type 0/1/3 groups are implemented at runtime."
                 )
             continue
 
@@ -175,43 +175,43 @@ def load_supported_action_groups(
                 raise ValueError(
                     f"Type 0 group '{spec.id}' in dataset '{dataset_name}' must contain exactly one feature."
                 )
-        elif gtype in (1, 2):
+        elif gtype == 1:
             if not spec.base_features:
                 raise ValueError(
-                    f"Type {gtype} group '{spec.id}' in dataset '{dataset_name}' must define roles.base."
+                    f"Type 1 group '{spec.id}' in dataset '{dataset_name}' must define roles.base."
                 )
             if not spec.derived_features:
                 raise ValueError(
-                    f"Type {gtype} group '{spec.id}' in dataset '{dataset_name}' must define roles.derived."
+                    f"Type 1 group '{spec.id}' in dataset '{dataset_name}' must define roles.derived."
                 )
             if len(spec.base_features) != 1:
                 raise ValueError(
-                    f"Type {gtype} group '{spec.id}' in dataset '{dataset_name}' must use a single base feature."
+                    f"Type 1 group '{spec.id}' in dataset '{dataset_name}' must use a single base feature."
                 )
         else:
             if len(spec.features) == 0:
                 raise ValueError(
-                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' must define features."
+                    f"Type 3 group '{spec.id}' in dataset '{dataset_name}' must define features."
                 )
             if not any(abs(float(v)) <= 1e-9 for v in spec.action_values):
                 raise ValueError(
-                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' must include delta=0."
+                    f"Type 3 group '{spec.id}' in dataset '{dataset_name}' must include delta=0."
                 )
             missing_scales = [feat for feat in spec.features if feat not in spec.action_scales]
             if missing_scales:
                 raise ValueError(
-                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' is missing scales for {missing_scales}."
+                    f"Type 3 group '{spec.id}' in dataset '{dataset_name}' is missing scales for {missing_scales}."
                 )
             missing_domains = [feat for feat in spec.features if feat not in spec.action_domains]
             if missing_domains:
                 raise ValueError(
-                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' is missing domains for {missing_domains}."
+                    f"Type 3 group '{spec.id}' in dataset '{dataset_name}' is missing domains for {missing_domains}."
                 )
 
         if learnable_only and not spec.is_learnable_values_group():
             continue
 
-        allowed_action_kinds = ("delta_steps", "noop") if gtype == 4 else ("values", "noop")
+        allowed_action_kinds = ("delta_steps", "noop") if gtype == 3 else ("values", "noop")
         if spec.mutable and spec.action_kind not in allowed_action_kinds:
             raise NotImplementedError(
                 f"Mutable action group '{spec.id}' in dataset '{dataset_name}' uses unsupported action_kind='{spec.action_kind}'."
@@ -298,11 +298,11 @@ def build_action_projection_spec(
 
         if action_kind == "delta_steps":
             if not group_features:
-                raise ValueError(f"Type 4 group '{spec.id}' in dataset '{dataset_name}' is missing features.")
+                raise ValueError(f"Type 3 group '{spec.id}' in dataset '{dataset_name}' is missing features.")
             missing_cont = [feat for feat in group_features if feat not in cont_pos]
             if missing_cont:
                 raise NotImplementedError(
-                    f"Type 4 group '{spec.id}' in dataset '{dataset_name}' uses non-continuous runtime features: {missing_cont}."
+                    f"Type 3 group '{spec.id}' in dataset '{dataset_name}' uses non-continuous runtime features: {missing_cont}."
                 )
 
             kind = "continuous"
@@ -484,9 +484,9 @@ def action_feasibility_mask(
 
     if group.action_kind == "delta_steps":
         if not group.cont_indices:
-            raise ValueError(f"Type 4 group '{group.id}' is missing cont_indices.")
+            raise ValueError(f"Type 3 group '{group.id}' is missing cont_indices.")
         if len(group.scaled_feature_domains) != len(group.cont_indices):
-            raise ValueError(f"Type 4 group '{group.id}' has inconsistent feature-domain metadata.")
+            raise ValueError(f"Type 3 group '{group.id}' has inconsistent feature-domain metadata.")
 
         deltas = group.delta_domain.to(device=device, dtype=x.dtype)
         zero_mask = torch.isclose(deltas, torch.zeros_like(deltas), atol=eps, rtol=0.0)
@@ -568,7 +568,7 @@ def action_feasibility_mask(
     return feasible
 
 
-def _project_type4_continuous(
+def _project_type3_continuous(
     *,
     x: torch.Tensor,
     cf_soft: torch.Tensor,
@@ -576,7 +576,7 @@ def _project_type4_continuous(
     eps: float,
 ) -> Dict[int, torch.Tensor]:
     if not group.cont_indices:
-        raise ValueError(f"Type 4 group '{group.id}' is missing cont_indices.")
+        raise ValueError(f"Type 3 group '{group.id}' is missing cont_indices.")
 
     block = torch.stack([x[:, idx] for idx in group.cont_indices], dim=1)
     ref = torch.stack([cf_soft[:, idx] for idx in group.cont_indices], dim=1)
@@ -674,7 +674,7 @@ def _project_type0_categorical(
     return selected
 
 
-def _project_type12_continuous(
+def _project_type1_continuous(
     *,
     spec: ActionProjectionSpec,
     x: torch.Tensor,
@@ -782,8 +782,8 @@ def project_to_actionable(
 
     projected = x.clone()
     for group in spec.groups:
-        if group.type == 4 and group.action_kind == "delta_steps":
-            updates = _project_type4_continuous(
+        if group.type == 3 and group.action_kind == "delta_steps":
+            updates = _project_type3_continuous(
                 x=x,
                 cf_soft=cf_soft,
                 group=group,
@@ -793,8 +793,8 @@ def project_to_actionable(
                 projected[:, index : index + 1] = value
             continue
 
-        if group.type in (1, 2) and group.derived:
-            updates = _project_type12_continuous(
+        if group.type == 1 and group.derived:
+            updates = _project_type1_continuous(
                 spec=spec,
                 x=x,
                 cf_soft=cf_soft,
