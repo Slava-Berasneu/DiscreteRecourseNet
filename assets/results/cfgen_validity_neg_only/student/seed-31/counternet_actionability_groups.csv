@@ -1,0 +1,27 @@
+,feature,features,type,mutable,n_samples,changed_count,change_rate,monotonicity_violation_rate,immutability_violation_rate,rule_kind,rule_check_supported,rule_violation_rate,valid_change_rate_given_change,monotonicity_violation_rate_given_change,immutability_violation_rate_given_change,rule_violation_rate_given_change
+Increase_Online_Participation,forumng_click,"['forumng_click', 'homepage_click', 'subpage_click', 'resource_click', 'url_click', 'oucontent_click']",3,True,3128,3128,1.0,1.0,0.0,latent_shift,True,1.0,0.0,1.0,0.0,1.0
+dataplus_click,dataplus_click,['dataplus_click'],0,True,3128,3128,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+oucollaborate_click,oucollaborate_click,['oucollaborate_click'],0,True,3128,3128,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+ouwiki_click,ouwiki_click,['ouwiki_click'],0,True,3128,3128,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+questionnaire_click,questionnaire_click,['questionnaire_click'],0,True,3128,3128,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+studied_credits,studied_credits,['studied_credits'],0,True,3128,3128,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+weighted_score,weighted_score,['weighted_score'],0,True,3128,3128,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+ouelluminate_click,ouelluminate_click,['ouelluminate_click'],0,True,3128,3128,1.0,0.9865728900255755,0.0,,False,0.0,0.013427109974424553,0.9865728900255755,0.0,0.0
+highest_education,highest_education,['highest_education'],0,True,3128,1638,0.5236572890025576,0.5044757033248082,0.0,,False,0.0,0.03663003663003663,0.9633699633699634,0.0,0.0
+dualpane_click,dualpane_click,['dualpane_click'],0,True,3128,3128,1.0,0.03037084398976982,0.0,,False,0.0,0.9696291560102301,0.03037084398976982,0.0,0.0
+externalquiz_click,externalquiz_click,['externalquiz_click'],0,True,3128,3128,1.0,0.028132992327365727,0.0,,False,0.0,0.9718670076726342,0.028132992327365727,0.0,0.0
+glossary_click,glossary_click,['glossary_click'],0,True,3128,3128,1.0,0.021099744245524295,0.0,,False,0.0,0.9789002557544757,0.021099744245524295,0.0,0.0
+htmlactivity_click,htmlactivity_click,['htmlactivity_click'],0,True,3128,3128,1.0,0.016304347826086956,0.0,,False,0.0,0.9836956521739131,0.016304347826086956,0.0,0.0
+num_of_prev_attempts,num_of_prev_attempts,['num_of_prev_attempts'],0,False,3128,3128,1.0,0.0,1.0,,False,0.0,0.0,0.0,1.0,0.0
+weight,weight,['weight'],0,False,3128,3128,1.0,0.0,1.0,,False,0.0,0.0,0.0,1.0,0.0
+region,region,['region'],0,False,3128,2802,0.8957800511508951,0.0,0.8957800511508951,,False,0.0,0.0,0.0,1.0,0.0
+imd_band,imd_band,['imd_band'],0,False,3128,2739,0.8756393861892583,0.0,0.8756393861892583,,False,0.0,0.0,0.0,1.0,0.0
+code_module,code_module,['code_module'],0,False,3128,2409,0.7701406649616368,0.0,0.7701406649616368,,False,0.0,0.0,0.0,1.0,0.0
+gender,gender,['gender'],0,False,3128,1403,0.4485294117647059,0.0,0.4485294117647059,,False,0.0,0.0,0.0,1.0,0.0
+age_band,age_band,['age_band'],0,False,3128,807,0.2579923273657289,0.0,0.2579923273657289,,False,0.0,0.0,0.0,1.0,0.0
+disability,disability,['disability'],0,False,3128,378,0.12084398976982097,0.0,0.12084398976982097,,False,0.0,0.0,0.0,1.0,0.0
+folder_click,folder_click,['folder_click'],0,True,3128,3128,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+page_click,page_click,['page_click'],0,True,3128,3128,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+quiz_click,quiz_click,['quiz_click'],0,True,3128,3128,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+repeatactivity_click,repeatactivity_click,['repeatactivity_click'],0,True,3128,3128,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+sharedsubpage_click,sharedsubpage_click,['sharedsubpage_click'],0,True,3128,3128,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0

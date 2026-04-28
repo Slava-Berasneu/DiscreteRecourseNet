@@ -42,7 +42,7 @@ MODELS_TO_RUN: List[str] = [
     "discrete_recoursenet",
     "counternet_projection",
     "counternet",
-    #"vanillacf"
+    "vanillacf"
 ]
 
 # Comparison-mode per-model settings
@@ -68,7 +68,7 @@ MODEL_RUN_SETTINGS: Dict[str, Dict[str, Any]] = {
         "ablation": "cfgen_flip_neg_stay_pos"
         # "ablation": "cfgen_flip_neg_stay_pos",
     },
-    #"vanillacf": {}
+    "vanillacf": {}
 }
 
 MODEL_REGISTRY = {
@@ -954,6 +954,6 @@ if __name__ == "__main__":
     main(sys.argv[1:])
 
     # Examples:
-    # python scripts/run_home_counternet.py --retrain --datasets adult credit_card home student --ablation cfgen_flip_neg_stay_pos
-    # python scripts/run_home_counternet.py --run-mode comparison --run-tag home_compare --retrain --datasets home
-    # python scripts/run_home_counternet.py --grid --datasets home --grid_lambda2 0.001,0.01 --grid_action_cost_base 0.005,0.01
+    # python scripts/run_models.py --retrain --datasets adult credit_card home student --ablation cfgen_flip_neg_stay_pos
+    # python scripts/run_models.py --run-mode comparison --run-tag home_compare --retrain --datasets home
+    # python scripts/run_models.py --grid --datasets home --grid_lambda2 0.001,0.01 --grid_action_cost_base 0.005,0.01

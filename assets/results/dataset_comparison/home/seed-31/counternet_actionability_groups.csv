@@ -1,0 +1,20 @@
+,feature,features,type,mutable,n_samples,changed_count,change_rate,monotonicity_violation_rate,immutability_violation_rate,rule_kind,rule_check_supported,rule_violation_rate,valid_change_rate_given_change,monotonicity_violation_rate_given_change,immutability_violation_rate_given_change,rule_violation_rate_given_change
+Reduce_More_Severe_Delinquencies,NumTrades60Ever2DerogPubRec,"['NumTrades60Ever2DerogPubRec', 'NumTrades90Ever2DerogPubRec']",1,True,861,861,1.0,1.0,0.0,clip_derived_to_base,True,1.0,0.0,1.0,0.0,1.0
+Pay_Down_Revolving_Debt,NetFractionRevolvingBurden,"['NetFractionRevolvingBurden', 'NumBank2NatlTradesWHighUtilization']",3,True,861,861,1.0,0.12659698025551683,0.0,latent_shift,True,1.0,0.0,0.12659698025551683,0.0,1.0
+Stop_New_Credit_Applications,NumInqLast6M,"['NumInqLast6M', 'NumInqLast6Mexcl7days']",1,True,861,861,1.0,0.0,0.0,clip_derived_to_base,True,1.0,0.0,0.0,0.0,1.0
+Build_Satisfactory_Credit_History,NumSatisfactoryTrades,"['NumSatisfactoryTrades', 'NumTotalTrades']",1,True,861,861,1.0,0.46689895470383275,0.0,derived_adds_base_delta,True,0.9907084785133565,0.006968641114982578,0.46689895470383275,0.0,0.9907084785133565
+NumTradesOpeninLast12M,NumTradesOpeninLast12M,['NumTradesOpeninLast12M'],0,True,861,861,1.0,1.0,0.0,,False,0.0,0.0,1.0,0.0,0.0
+NumInstallTradesWBalance,NumInstallTradesWBalance,['NumInstallTradesWBalance'],0,True,861,861,1.0,0.9291521486643438,0.0,,False,0.0,0.0011614401858304297,0.9291521486643438,0.0,0.0
+PercentTradesNeverDelq,PercentTradesNeverDelq,['PercentTradesNeverDelq'],0,True,861,861,1.0,0.7212543554006968,0.0,,False,0.0,0.2787456445993031,0.7212543554006968,0.0,0.0
+MSinceMostRecentDelq,MSinceMostRecentDelq,['MSinceMostRecentDelq'],0,True,861,861,1.0,0.5470383275261324,0.0,,False,0.0,0.17305458768873402,0.5470383275261324,0.0,0.0
+PercentTradesWBalance,PercentTradesWBalance,['PercentTradesWBalance'],0,True,861,861,1.0,0.26248548199767713,0.0,,False,0.0,0.7305458768873403,0.26248548199767713,0.0,0.0
+NetFractionInstallBurden,NetFractionInstallBurden,['NetFractionInstallBurden'],0,True,861,861,1.0,0.12775842044134728,0.0,,False,0.0,0.586527293844367,0.12775842044134728,0.0,0.0
+ExternalRiskEstimate,ExternalRiskEstimate,['ExternalRiskEstimate'],0,False,861,861,1.0,0.0,1.0,,False,0.0,0.0,0.0,1.0,0.0
+MSinceOldestTradeOpen,MSinceOldestTradeOpen,['MSinceOldestTradeOpen'],0,False,861,861,1.0,0.0,1.0,,False,0.0,0.0,0.0,1.0,0.0
+AverageMInFile,AverageMInFile,['AverageMInFile'],0,True,861,861,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+MSinceMostRecentInqexcl7days,MSinceMostRecentInqexcl7days,['MSinceMostRecentInqexcl7days'],0,True,861,861,1.0,0.0,0.0,,False,0.0,0.7282229965156795,0.0,0.0,0.0
+MSinceMostRecentTradeOpen,MSinceMostRecentTradeOpen,['MSinceMostRecentTradeOpen'],0,True,861,861,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+NumRevolvingTradesWBalance,NumRevolvingTradesWBalance,['NumRevolvingTradesWBalance'],0,True,861,861,1.0,0.0,0.0,,False,0.0,0.967479674796748,0.0,0.0,0.0
+PercentInstallTrades,PercentInstallTrades,['PercentInstallTrades'],0,True,861,861,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+MaxDelq2PublicRecLast12M,MaxDelq2PublicRecLast12M,['MaxDelq2PublicRecLast12M'],0,True,861,550,0.6387921022067363,0.0,0.0,,False,0.0,0.09636363636363636,0.0,0.0,0.0
+MaxDelqEver,MaxDelqEver,['MaxDelqEver'],0,True,861,550,0.6387921022067363,0.0,0.0,,False,0.0,0.9854545454545455,0.0,0.0,0.0

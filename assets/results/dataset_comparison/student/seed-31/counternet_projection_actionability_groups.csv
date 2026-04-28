@@ -1,0 +1,27 @@
+,feature,features,type,mutable,n_samples,changed_count,change_rate,monotonicity_violation_rate,immutability_violation_rate,rule_kind,rule_check_supported,rule_violation_rate,valid_change_rate_given_change,monotonicity_violation_rate_given_change,immutability_violation_rate_given_change,rule_violation_rate_given_change
+dualpane_click,dualpane_click,['dualpane_click'],0,True,3179,3179,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+glossary_click,glossary_click,['glossary_click'],0,True,3179,3179,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+htmlactivity_click,htmlactivity_click,['htmlactivity_click'],0,True,3179,3179,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+oucollaborate_click,oucollaborate_click,['oucollaborate_click'],0,True,3179,3179,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+repeatactivity_click,repeatactivity_click,['repeatactivity_click'],0,True,3179,3179,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+sharedsubpage_click,sharedsubpage_click,['sharedsubpage_click'],0,True,3179,3179,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+quiz_click,quiz_click,['quiz_click'],0,True,3179,3174,0.9984271783579742,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+weighted_score,weighted_score,['weighted_score'],0,True,3179,3154,0.992135891789871,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+ouwiki_click,ouwiki_click,['ouwiki_click'],0,True,3179,3150,0.9908776344762504,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+highest_education,highest_education,['highest_education'],0,True,3179,1567,0.49292230261088393,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+Increase_Online_Participation,forumng_click,"['forumng_click', 'homepage_click', 'subpage_click', 'resource_click', 'url_click', 'oucontent_click']",3,True,3179,652,0.20509594212016358,0.0,0.0,latent_shift,True,0.0,1.0,0.0,0.0,0.0
+age_band,age_band,['age_band'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+code_module,code_module,['code_module'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+dataplus_click,dataplus_click,['dataplus_click'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+disability,disability,['disability'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+externalquiz_click,externalquiz_click,['externalquiz_click'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+folder_click,folder_click,['folder_click'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+gender,gender,['gender'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+imd_band,imd_band,['imd_band'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+num_of_prev_attempts,num_of_prev_attempts,['num_of_prev_attempts'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+ouelluminate_click,ouelluminate_click,['ouelluminate_click'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+page_click,page_click,['page_click'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+questionnaire_click,questionnaire_click,['questionnaire_click'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+region,region,['region'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+studied_credits,studied_credits,['studied_credits'],0,True,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+weight,weight,['weight'],0,False,3179,0,0.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0

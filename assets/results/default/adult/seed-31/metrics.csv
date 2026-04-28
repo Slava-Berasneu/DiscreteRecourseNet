@@ -1,0 +1,2 @@
+,cat_proximity,cont_proximity,sensitivity,time,pred_accuracy,proximity,sparsity,manifold_dist,validity_recourse,actionability_rate,monotonicity_violation_rate,immutability_violation_rate,group_rule_violation_rate,avg_num_actionability_violations,avg_num_actionability_changes,valid_change_rate
+counternet,6.989654064178467,1.1284395456314087,0.8100000023841858,0.0008056698243738448,0.7736834287643433,0.27993426240723707,0.6915085017681122,0.5136738419532776,1.0,0.0,0.0,1.0,0.0,2.4438557624816895,5.4948272705078125,0.5552443265914917

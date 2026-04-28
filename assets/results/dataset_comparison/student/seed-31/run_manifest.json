@@ -1,0 +1,63 @@
+{
+  "dataset_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\configs\\student.json",
+  "dataset_name": "student",
+  "default_ablation": null,
+  "models": [
+    {
+      "checkpoint_dir": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\discrete_recoursenet",
+      "effective_ablation": "cfgen_flip_neg_stay_pos",
+      "resolved_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\discrete_recoursenet\\resolved_config.json",
+      "spec": {
+        "ablation": "cfgen_flip_neg_stay_pos",
+        "label": "discrete_recoursenet",
+        "name": "discrete_recoursenet",
+        "overrides": {
+          "action_cost_base": 0.005,
+          "gumbel_tau_choice": 0.75,
+          "gumbel_tau_mask": 0.5,
+          "lambda_1": 1.0,
+          "lambda_2": 0.02,
+          "lambda_3": 1.0
+        }
+      }
+    },
+    {
+      "checkpoint_dir": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\counternet_projection",
+      "effective_ablation": "cfgen_flip_neg_stay_pos",
+      "resolved_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\counternet_projection\\resolved_config.json",
+      "spec": {
+        "ablation": "cfgen_flip_neg_stay_pos",
+        "label": "counternet_projection",
+        "name": "counternet_projection",
+        "overrides": {}
+      }
+    },
+    {
+      "checkpoint_dir": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\counternet",
+      "effective_ablation": "cfgen_flip_neg_stay_pos",
+      "resolved_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\counternet\\resolved_config.json",
+      "spec": {
+        "ablation": "cfgen_flip_neg_stay_pos",
+        "label": "counternet",
+        "name": "counternet",
+        "overrides": {}
+      }
+    },
+    {
+      "checkpoint_dir": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\vanillacf",
+      "effective_ablation": null,
+      "resolved_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\dataset_comparison\\student\\seed-31\\models\\vanillacf\\resolved_config.json",
+      "spec": {
+        "ablation": null,
+        "label": "vanillacf",
+        "name": "vanillacf",
+        "overrides": {}
+      }
+    }
+  ],
+  "run_mode": "comparison",
+  "run_tag": "dataset_comparison",
+  "seed": 31,
+  "shared_overrides": {},
+  "trainer_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\configs\\trainer.json"
+}

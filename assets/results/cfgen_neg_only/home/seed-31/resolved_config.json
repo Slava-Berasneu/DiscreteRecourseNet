@@ -1,0 +1,61 @@
+{
+  "_runner_effective_ablation": "cfgen_neg_only",
+  "_runner_model_label": "counternet",
+  "_runner_model_name": "counternet",
+  "ablation_tag": "cfgen_neg_only",
+  "action_groups_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\actions\\action_groups.json",
+  "batch_size": 128,
+  "cf_target_filter": "neg_only",
+  "continous_cols": [
+    "ExternalRiskEstimate",
+    "MSinceOldestTradeOpen",
+    "MSinceMostRecentTradeOpen",
+    "AverageMInFile",
+    "NumSatisfactoryTrades",
+    "NumTrades60Ever2DerogPubRec",
+    "NumTrades90Ever2DerogPubRec",
+    "PercentTradesNeverDelq",
+    "MSinceMostRecentDelq",
+    "NumTotalTrades",
+    "NumTradesOpeninLast12M",
+    "PercentInstallTrades",
+    "MSinceMostRecentInqexcl7days",
+    "NumInqLast6M",
+    "NumInqLast6Mexcl7days",
+    "NetFractionRevolvingBurden",
+    "NetFractionInstallBurden",
+    "NumRevolvingTradesWBalance",
+    "NumInstallTradesWBalance",
+    "NumBank2NatlTradesWHighUtilization",
+    "PercentTradesWBalance"
+  ],
+  "data_dir": "D:\\Github Large\\DiscreteRecourseNet\\assets\\data\\s_home.csv",
+  "dataset_name": "home",
+  "decoder_dims": [
+    10,
+    10
+  ],
+  "discret_cols": [
+    "MaxDelq2PublicRecLast12M",
+    "MaxDelqEver"
+  ],
+  "encoder_dims": [
+    35,
+    100,
+    10
+  ],
+  "explainer_dims": [
+    10,
+    100
+  ],
+  "lambda_1": 1.0,
+  "lambda_2": 0.1,
+  "lambda_3": 0.5,
+  "loss_1": "mse",
+  "loss_2": "mse",
+  "loss_3": "mse",
+  "lr": 0.005,
+  "prediction_threshold": 0.5,
+  "prediction_threshold_mode": "auto_val_balanced_accuracy",
+  "threshold": 1
+}

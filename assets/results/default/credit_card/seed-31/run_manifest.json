@@ -1,0 +1,23 @@
+{
+  "dataset_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\configs\\extra\\credit_card.json",
+  "dataset_name": "credit_card",
+  "default_ablation": null,
+  "models": [
+    {
+      "checkpoint_dir": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\default\\credit_card\\seed-31",
+      "effective_ablation": null,
+      "resolved_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\results\\default\\credit_card\\seed-31\\resolved_config.json",
+      "spec": {
+        "ablation": null,
+        "label": "counternet",
+        "name": "counternet",
+        "overrides": {}
+      }
+    }
+  ],
+  "run_mode": "shared",
+  "run_tag": "default",
+  "seed": 31,
+  "shared_overrides": {},
+  "trainer_config_path": "D:\\Github Large\\DiscreteRecourseNet\\assets\\configs\\trainer.json"
+}

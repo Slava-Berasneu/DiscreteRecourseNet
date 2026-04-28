@@ -1,0 +1,9 @@
+,feature,features,type,mutable,n_samples,changed_count,change_rate,monotonicity_violation_rate,immutability_violation_rate,rule_kind,rule_check_supported,rule_violation_rate,valid_change_rate_given_change,monotonicity_violation_rate_given_change,immutability_violation_rate_given_change,rule_violation_rate_given_change
+age,age,['age'],0,False,4080,4080,1.0,0.0,1.0,,False,0.0,0.0,0.0,1.0,0.0
+marital_status,marital_status,['marital_status'],0,False,4080,3021,0.7404411764705883,0.0,0.7404411764705883,,False,0.0,0.0,0.0,1.0,0.0
+gender,gender,['gender'],0,False,4080,9,0.0022058823529411764,0.0,0.0022058823529411764,,False,0.0,0.0,0.0,1.0,0.0
+race,race,['race'],0,False,4080,2,0.0004901960784313725,0.0,0.0004901960784313725,,False,0.0,0.0,0.0,1.0,0.0
+hours_per_week,hours_per_week,['hours_per_week'],0,True,4080,4080,1.0,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+education,education,['education'],0,True,4080,3703,0.9075980392156863,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+occupation,occupation,['occupation'],0,True,4080,1881,0.4610294117647059,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
+workclass,workclass,['workclass'],0,True,4080,27,0.006617647058823529,0.0,0.0,,False,0.0,1.0,0.0,0.0,0.0
