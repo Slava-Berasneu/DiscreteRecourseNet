@@ -1,7 +1,6 @@
 # DiscreteRecourseNet: End-to-End Actionable Recourse in Discrete Action Spaces
 
-This is the code repository of the paper
-[DiscreteRecourseNet: End-to-End Actionable Recourse in Discrete Action Spaces](docs/DiscreteRecourseNet-thesis.pdf)
+This is the code repository of the paper [DiscreteRecourseNet: End-to-End Actionable Recourse in Discrete Action Spaces](docs/Master_Thesis_DiscreteRecourseNet_ViachaslauBerasneu.pdf).
 which builds on the work of
 [CounterNet: End-to-End Training of Counterfactual Aware Predictions](https://birkhoffg.github.io/files/icml21_workshop/counternet_paper.pdf). The purpose of the repository is only for research and reproduction of the paper's results.
 
